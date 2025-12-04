@@ -2,6 +2,8 @@ package sftp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1026,13 +1030,351 @@ func sftpMatchesGlobFilter(filePath, filter string) bool {
 	return matched
 }
 
+// ============================================================================
+// Chunked Upload Implementation
+// ============================================================================
+
+// sftpUploadInfo stores metadata for an in-progress chunked upload.
+type sftpUploadInfo struct {
+	path     string // Target path for the final file
+	partsDir string // Directory on SFTP server storing uploaded parts
+	adapter  *Adapter
+}
+
+// sftpUploadRegistry is a thread-safe registry for in-progress uploads.
+var sftpUploadRegistry = struct {
+	sync.RWMutex
+	uploads map[string]*sftpUploadInfo
+}{
+	uploads: make(map[string]*sftpUploadInfo),
+}
+
+// generateSFTPUploadID creates a unique upload identifier.
+func generateSFTPUploadID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// InitiateUpload starts a chunked upload process and returns an upload ID.
+// Parts are stored in a temporary directory on the SFTP server until CompleteUpload is called.
+func (a *Adapter) InitiateUpload(ctx context.Context, filePath string) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	if !a.isPathSafe(filePath) {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: filePath,
+			Err:  filekit.ErrNotAllowed,
+		}
+	}
+
+	if err := a.ensureConnected(); err != nil {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: filePath,
+			Err:  err,
+		}
+	}
+
+	// Generate a unique upload ID
+	uploadID, err := generateSFTPUploadID()
+	if err != nil {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: filePath,
+			Err:  err,
+		}
+	}
+
+	// Create a temporary directory on the SFTP server for storing parts
+	// Use the base path + .filekit-uploads/ + uploadID/
+	partsDir := path.Join(a.basePath, ".filekit-uploads", uploadID)
+	if err := a.client.MkdirAll(partsDir); err != nil {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: filePath,
+			Err:  fmt.Errorf("failed to create temp directory: %w", err),
+		}
+	}
+
+	// Store upload info
+	sftpUploadRegistry.Lock()
+	sftpUploadRegistry.uploads[uploadID] = &sftpUploadInfo{
+		path:     filePath,
+		partsDir: partsDir,
+		adapter:  a,
+	}
+	sftpUploadRegistry.Unlock()
+
+	return uploadID, nil
+}
+
+// UploadPart uploads a part of a file in a chunked upload process.
+// Parts are stored as numbered files (1, 2, 3, ...) in the temporary directory on the SFTP server.
+func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Validate part number
+	if partNumber < 1 {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("part number must be >= 1, got %d", partNumber),
+		}
+	}
+
+	// Get upload info
+	sftpUploadRegistry.RLock()
+	info, ok := sftpUploadRegistry.uploads[uploadID]
+	sftpUploadRegistry.RUnlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	if err := a.ensureConnected(); err != nil {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  err,
+		}
+	}
+
+	// Write part to file on SFTP server
+	partPath := path.Join(info.partsDir, fmt.Sprintf("%d", partNumber))
+	partFile, err := a.client.Create(partPath)
+	if err != nil {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("failed to create part file: %w", err),
+		}
+	}
+	defer partFile.Close()
+
+	if _, err := partFile.Write(data); err != nil {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("failed to write part data: %w", err),
+		}
+	}
+
+	return nil
+}
+
+// CompleteUpload finalizes a chunked upload by concatenating all parts.
+// Parts are read in numerical order and written to the target file on the SFTP server.
+func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Get and remove upload info
+	sftpUploadRegistry.Lock()
+	info, ok := sftpUploadRegistry.uploads[uploadID]
+	if ok {
+		delete(sftpUploadRegistry.uploads, uploadID)
+	}
+	sftpUploadRegistry.Unlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// Ensure cleanup of parts directory
+	defer a.removeAllSFTP(info.partsDir)
+
+	if err := a.ensureConnected(); err != nil {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  err,
+		}
+	}
+
+	// Read all part files
+	entries, err := a.client.ReadDir(info.partsDir)
+	if err != nil {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  err,
+		}
+	}
+
+	if len(entries) == 0 {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  errors.New("no parts uploaded"),
+		}
+	}
+
+	// Sort parts by part number
+	partNumbers := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		num, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		partNumbers = append(partNumbers, num)
+	}
+	sort.Ints(partNumbers)
+
+	// Prepare target path
+	fullPath := a.fullPath(info.path)
+
+	// Ensure the directory exists
+	dir := path.Dir(fullPath)
+	if err := a.client.MkdirAll(dir); err != nil {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: info.path,
+			Err:  err,
+		}
+	}
+
+	// Create the target file
+	targetFile, err := a.client.Create(fullPath)
+	if err != nil {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: info.path,
+			Err:  err,
+		}
+	}
+	defer targetFile.Close()
+
+	// Concatenate all parts in order
+	for _, partNum := range partNumbers {
+		partPath := path.Join(info.partsDir, fmt.Sprintf("%d", partNum))
+		partFile, err := a.client.Open(partPath)
+		if err != nil {
+			return &filekit.PathError{
+				Op:   "complete-upload",
+				Path: info.path,
+				Err:  fmt.Errorf("failed to open part %d: %w", partNum, err),
+			}
+		}
+
+		_, err = io.Copy(targetFile, partFile)
+		partFile.Close()
+		if err != nil {
+			return &filekit.PathError{
+				Op:   "complete-upload",
+				Path: info.path,
+				Err:  fmt.Errorf("failed to write part %d: %w", partNum, err),
+			}
+		}
+	}
+
+	return nil
+}
+
+// AbortUpload cancels a chunked upload and cleans up temporary files on the SFTP server.
+func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Get and remove upload info
+	sftpUploadRegistry.Lock()
+	info, ok := sftpUploadRegistry.uploads[uploadID]
+	if ok {
+		delete(sftpUploadRegistry.uploads, uploadID)
+	}
+	sftpUploadRegistry.Unlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "abort-upload",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	if err := a.ensureConnected(); err != nil {
+		return &filekit.PathError{
+			Op:   "abort-upload",
+			Path: uploadID,
+			Err:  err,
+		}
+	}
+
+	// Clean up parts directory
+	if err := a.removeAllSFTP(info.partsDir); err != nil {
+		return &filekit.PathError{
+			Op:   "abort-upload",
+			Path: uploadID,
+			Err:  err,
+		}
+	}
+
+	return nil
+}
+
+// removeAllSFTP recursively removes a directory and its contents on the SFTP server.
+func (a *Adapter) removeAllSFTP(dirPath string) error {
+	entries, err := a.client.ReadDir(dirPath)
+	if err != nil {
+		// Directory may not exist, which is fine
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		entryPath := path.Join(dirPath, entry.Name())
+		if entry.IsDir() {
+			if err := a.removeAllSFTP(entryPath); err != nil {
+				return err
+			}
+		} else {
+			if err := a.client.Remove(entryPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return a.client.RemoveDirectory(dirPath)
+}
+
 // Ensure Adapter implements required and optional interfaces
 var (
-	_ filekit.FileSystem  = (*Adapter)(nil)
-	_ filekit.FileReader  = (*Adapter)(nil)
-	_ filekit.FileWriter  = (*Adapter)(nil)
-	_ filekit.CanCopy     = (*Adapter)(nil)
-	_ filekit.CanMove     = (*Adapter)(nil)
-	_ filekit.CanChecksum = (*Adapter)(nil)
-	_ filekit.CanWatch    = (*Adapter)(nil)
+	_ filekit.FileSystem      = (*Adapter)(nil)
+	_ filekit.FileReader      = (*Adapter)(nil)
+	_ filekit.FileWriter      = (*Adapter)(nil)
+	_ filekit.CanCopy         = (*Adapter)(nil)
+	_ filekit.CanMove         = (*Adapter)(nil)
+	_ filekit.CanChecksum     = (*Adapter)(nil)
+	_ filekit.CanWatch        = (*Adapter)(nil)
+	_ filekit.ChunkedUploader = (*Adapter)(nil)
 )

@@ -2,13 +2,19 @@ package local
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gobeaver/filekit"
 )
@@ -912,13 +918,282 @@ type fsEvent struct {
 	Op   uint32
 }
 
+// ============================================================================
+// Chunked Upload Implementation
+// ============================================================================
+
+// uploadInfo stores metadata for an in-progress chunked upload.
+type uploadInfo struct {
+	path     string // Target path for the final file
+	partsDir string // Directory storing uploaded parts
+}
+
+// uploadRegistry is a thread-safe registry for in-progress uploads.
+var uploadRegistry = struct {
+	sync.RWMutex
+	uploads map[string]*uploadInfo
+}{
+	uploads: make(map[string]*uploadInfo),
+}
+
+// generateUploadID creates a unique upload identifier.
+func generateUploadID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// InitiateUpload starts a chunked upload process and returns an upload ID.
+// Parts are stored in a temporary directory until CompleteUpload is called.
+func (a *Adapter) InitiateUpload(ctx context.Context, path string) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	fullPath := filepath.Join(a.root, filepath.Clean(path))
+
+	// Check if the path is under the root
+	if !isPathUnderRoot(a.root, fullPath) {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: path,
+			Err:  filekit.ErrNotAllowed,
+		}
+	}
+
+	// Generate a unique upload ID
+	uploadID, err := generateUploadID()
+	if err != nil {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: path,
+			Err:  err,
+		}
+	}
+
+	// Create a temporary directory for storing parts
+	partsDir, err := os.MkdirTemp("", fmt.Sprintf("filekit-upload-%s-", uploadID))
+	if err != nil {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: path,
+			Err:  err,
+		}
+	}
+
+	// Store upload info
+	uploadRegistry.Lock()
+	uploadRegistry.uploads[uploadID] = &uploadInfo{
+		path:     path,
+		partsDir: partsDir,
+	}
+	uploadRegistry.Unlock()
+
+	return uploadID, nil
+}
+
+// UploadPart uploads a part of a file in a chunked upload process.
+// Parts are stored as numbered files (1, 2, 3, ...) in the temporary directory.
+func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Validate part number
+	if partNumber < 1 {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("part number must be >= 1, got %d", partNumber),
+		}
+	}
+
+	// Get upload info
+	uploadRegistry.RLock()
+	info, ok := uploadRegistry.uploads[uploadID]
+	uploadRegistry.RUnlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// Write part to file
+	partPath := filepath.Join(info.partsDir, fmt.Sprintf("%d", partNumber))
+	if err := os.WriteFile(partPath, data, 0600); err != nil {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  err,
+		}
+	}
+
+	return nil
+}
+
+// CompleteUpload finalizes a chunked upload by concatenating all parts.
+// Parts are read in numerical order and written to the target file.
+func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Get and remove upload info
+	uploadRegistry.Lock()
+	info, ok := uploadRegistry.uploads[uploadID]
+	if ok {
+		delete(uploadRegistry.uploads, uploadID)
+	}
+	uploadRegistry.Unlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// Ensure cleanup of parts directory
+	defer os.RemoveAll(info.partsDir)
+
+	// Read all part files
+	entries, err := os.ReadDir(info.partsDir)
+	if err != nil {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  err,
+		}
+	}
+
+	if len(entries) == 0 {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  errors.New("no parts uploaded"),
+		}
+	}
+
+	// Sort parts by part number
+	partNumbers := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		num, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		partNumbers = append(partNumbers, num)
+	}
+	sort.Ints(partNumbers)
+
+	// Prepare target path
+	fullPath := filepath.Join(a.root, filepath.Clean(info.path))
+
+	// Ensure the directory exists
+	dir := filepath.Dir(fullPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: info.path,
+			Err:  err,
+		}
+	}
+
+	// Create the target file
+	targetFile, err := os.Create(fullPath)
+	if err != nil {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: info.path,
+			Err:  err,
+		}
+	}
+	defer targetFile.Close()
+
+	// Concatenate all parts in order
+	for _, partNum := range partNumbers {
+		partPath := filepath.Join(info.partsDir, fmt.Sprintf("%d", partNum))
+		partFile, err := os.Open(partPath)
+		if err != nil {
+			return &filekit.PathError{
+				Op:   "complete-upload",
+				Path: info.path,
+				Err:  fmt.Errorf("failed to open part %d: %w", partNum, err),
+			}
+		}
+
+		_, err = io.Copy(targetFile, partFile)
+		partFile.Close()
+		if err != nil {
+			return &filekit.PathError{
+				Op:   "complete-upload",
+				Path: info.path,
+				Err:  fmt.Errorf("failed to write part %d: %w", partNum, err),
+			}
+		}
+	}
+
+	return nil
+}
+
+// AbortUpload cancels a chunked upload and cleans up temporary files.
+func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Get and remove upload info
+	uploadRegistry.Lock()
+	info, ok := uploadRegistry.uploads[uploadID]
+	if ok {
+		delete(uploadRegistry.uploads, uploadID)
+	}
+	uploadRegistry.Unlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "abort-upload",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// Clean up parts directory
+	if err := os.RemoveAll(info.partsDir); err != nil {
+		return &filekit.PathError{
+			Op:   "abort-upload",
+			Path: uploadID,
+			Err:  err,
+		}
+	}
+
+	return nil
+}
+
 // Ensure Adapter implements interfaces
 var (
-	_ filekit.FileSystem  = (*Adapter)(nil)
-	_ filekit.FileReader  = (*Adapter)(nil)
-	_ filekit.FileWriter  = (*Adapter)(nil)
-	_ filekit.CanCopy     = (*Adapter)(nil)
-	_ filekit.CanMove     = (*Adapter)(nil)
-	_ filekit.CanChecksum = (*Adapter)(nil)
-	_ filekit.CanWatch    = (*Adapter)(nil)
+	_ filekit.FileSystem      = (*Adapter)(nil)
+	_ filekit.FileReader      = (*Adapter)(nil)
+	_ filekit.FileWriter      = (*Adapter)(nil)
+	_ filekit.CanCopy         = (*Adapter)(nil)
+	_ filekit.CanMove         = (*Adapter)(nil)
+	_ filekit.CanChecksum     = (*Adapter)(nil)
+	_ filekit.CanWatch        = (*Adapter)(nil)
+	_ filekit.ChunkedUploader = (*Adapter)(nil)
 )

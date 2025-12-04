@@ -17,7 +17,7 @@ A comprehensive, production-ready filesystem abstraction library for Go with sup
 - **Metadata Caching** - Pluggable cache for FileExists/Stat/ListContents operations
 - **File Validation** - Integrated filevalidator with 60+ format support
 - **Progress Tracking** - Upload progress callbacks for large files
-- **Chunked Uploads** - Multipart upload support for S3
+- **Chunked Uploads** - Multipart upload support for local, S3, GCS, Azure, and SFTP
 - **Pre-signed URLs** - Generate temporary access URLs for cloud storage
 - **Pure Go** - No CGO dependencies, easy cross-compilation
 - **Thread-Safe** - All operations are safe for concurrent use
@@ -192,7 +192,7 @@ type FileInfo struct {
 
 ### ChunkedUploader Interface
 
-For filesystems that support multipart uploads (like S3):
+For filesystems that support multipart uploads (local, S3, GCS, Azure, and SFTP):
 
 ```go
 type ChunkedUploader interface {
@@ -461,11 +461,11 @@ selector := filekit.FuncSelectorFull(
 
 | Driver | FileSystem | CanCopy | CanMove | CanSignURL | CanChecksum | CanWatch | ChunkedUploader |
 |--------|------------|---------|---------|------------|-------------|----------|-----------------|
-| `local` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Native | ❌ |
+| `local` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Native | ✅ |
 | `s3` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ✅ |
-| `gcs` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ❌ |
-| `azure` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ❌ |
-| `sftp` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Polling | ❌ |
+| `gcs` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ✅ |
+| `azure` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ✅ |
+| `sftp` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Polling | ✅ |
 | `memory` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Native | ❌ |
 | `zip` | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ Never | ❌ |
 
@@ -1421,24 +1421,24 @@ github.com/gobeaver/filekit/           # Main module
 
 ## Feature Comparison
 
-| Feature | FileKit | Afero | Flysystem (PHP) |
-|---------|---------|-------|-----------------|
-| Local filesystem | ✅ | ✅ | ✅ |
-| Amazon S3 | ✅ | ⚠️ Third-party | ✅ |
-| Google Cloud Storage | ✅ | ❌ | ✅ |
-| Azure Blob Storage | ✅ | ❌ | ✅ |
-| SFTP | ✅ | ❌ | ✅ |
-| In-memory | ✅ | ✅ | ✅ |
-| ZIP Archive | ✅ | ❌ | ✅ |
-| **Mount Manager** | ✅ | ⚠️ | ✅ |
-| **Built-in encryption** | ✅ | ❌ | ❌ |
-| **File validation** | ✅ | ❌ | ❌ |
-| **Checksums** | ✅ | ❌ | ✅ |
-| **File watching** | ✅ | ❌ | ❌ |
-| **Pre-signed URLs** | ✅ | ❌ | ✅ |
-| **Progress tracking** | ✅ | ❌ | ❌ |
-| **Chunked uploads** | ✅ | ❌ | ✅ |
-| Pure Go (no CGO) | ✅ | ✅ | N/A |
+| Feature | FileKit | Afero | Flysystem (PHP) | Commons VFS (Java) | IFileProvider (.NET) |
+|---------|---------|-------|-----------------|--------------------|-----------------------|
+| Local filesystem | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Amazon S3 | ✅ | ⚠️ Third-party | ✅ | ⚠️ Third-party | ⚠️ Third-party |
+| Google Cloud Storage | ✅ | ❌ | ✅ | ⚠️ Third-party | ⚠️ Third-party |
+| Azure Blob Storage | ✅ | ❌ | ✅ | ⚠️ Third-party | ⚠️ Third-party |
+| SFTP | ✅ | ❌ | ✅ | ✅ | ❌ |
+| In-memory | ✅ | ✅ | ✅ | ✅ | ✅ |
+| ZIP Archive | ✅ | ❌ | ✅ | ✅ | ❌ |
+| **Mount Manager** | ✅ | ⚠️ | ✅ | ✅ | ✅ |
+| **Built-in encryption** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **File validation** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Checksums** | ✅ | ❌ | ✅ | ❌ | ❌ |
+| **File watching** | ✅ | ❌ | ❌ | ⚠️ Polling only | ✅ |
+| **Pre-signed URLs** | ✅ | ❌ | ✅ | ❌ | ❌ |
+| **Progress tracking** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Chunked uploads** | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Pure Go (no CGO) | ✅ | ✅ | N/A | N/A | N/A |
 
 ---
 

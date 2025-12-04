@@ -2,13 +2,19 @@ package gcs
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -743,14 +749,342 @@ func gcsMatchesGlobFilter(filePath, filter string) bool {
 	return matched
 }
 
+// ============================================================================
+// Chunked Upload Implementation
+// ============================================================================
+
+// gcsUploadInfo stores metadata for an in-progress chunked upload.
+type gcsUploadInfo struct {
+	path       string // Target path for the final file
+	partsPrefix string // Prefix for temporary part objects
+	adapter    *Adapter
+}
+
+// gcsUploadRegistry is a thread-safe registry for in-progress uploads.
+var gcsUploadRegistry = struct {
+	sync.RWMutex
+	uploads map[string]*gcsUploadInfo
+}{
+	uploads: make(map[string]*gcsUploadInfo),
+}
+
+// generateGCSUploadID creates a unique upload identifier.
+func generateGCSUploadID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// InitiateUpload starts a chunked upload process and returns an upload ID.
+// Parts are stored as temporary objects in GCS until CompleteUpload is called.
+func (a *Adapter) InitiateUpload(ctx context.Context, filePath string) (string, error) {
+	// Generate a unique upload ID
+	uploadID, err := generateGCSUploadID()
+	if err != nil {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: filePath,
+			Err:  err,
+		}
+	}
+
+	// Create prefix for temporary parts: .filekit-uploads/{uploadID}/
+	partsPrefix := path.Join(a.prefix, ".filekit-uploads", uploadID) + "/"
+
+	// Store upload info
+	gcsUploadRegistry.Lock()
+	gcsUploadRegistry.uploads[uploadID] = &gcsUploadInfo{
+		path:        filePath,
+		partsPrefix: partsPrefix,
+		adapter:     a,
+	}
+	gcsUploadRegistry.Unlock()
+
+	return uploadID, nil
+}
+
+// UploadPart uploads a part of a file in a chunked upload process.
+// Parts are stored as numbered objects (1, 2, 3, ...) in GCS.
+func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) error {
+	// Validate part number
+	if partNumber < 1 {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("part number must be >= 1, got %d", partNumber),
+		}
+	}
+
+	// Get upload info
+	gcsUploadRegistry.RLock()
+	info, ok := gcsUploadRegistry.uploads[uploadID]
+	gcsUploadRegistry.RUnlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// Write part to GCS
+	partKey := fmt.Sprintf("%s%d", info.partsPrefix, partNumber)
+	obj := a.client.Bucket(a.bucket).Object(partKey)
+	writer := obj.NewWriter(ctx)
+
+	if _, err := writer.Write(data); err != nil {
+		writer.Close()
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("failed to write part data: %w", err),
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("failed to close part writer: %w", err),
+		}
+	}
+
+	return nil
+}
+
+// CompleteUpload finalizes a chunked upload by composing all parts.
+// GCS supports composing up to 32 objects at a time, so for more parts
+// we do iterative composition.
+func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
+	// Get and remove upload info
+	gcsUploadRegistry.Lock()
+	info, ok := gcsUploadRegistry.uploads[uploadID]
+	if ok {
+		delete(gcsUploadRegistry.uploads, uploadID)
+	}
+	gcsUploadRegistry.Unlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// List all part objects
+	bkt := a.client.Bucket(a.bucket)
+	query := &storage.Query{Prefix: info.partsPrefix}
+	it := bkt.Objects(ctx, query)
+
+	var partKeys []string
+	for {
+		attrs, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return &filekit.PathError{
+				Op:   "complete-upload",
+				Path: uploadID,
+				Err:  err,
+			}
+		}
+		partKeys = append(partKeys, attrs.Name)
+	}
+
+	if len(partKeys) == 0 {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  errors.New("no parts uploaded"),
+		}
+	}
+
+	// Sort parts by part number
+	sort.Slice(partKeys, func(i, j int) bool {
+		// Extract part numbers from keys
+		numI := extractPartNumber(partKeys[i], info.partsPrefix)
+		numJ := extractPartNumber(partKeys[j], info.partsPrefix)
+		return numI < numJ
+	})
+
+	// Target object
+	targetKey := path.Join(a.prefix, info.path)
+	targetObj := bkt.Object(targetKey)
+
+	// GCS Compose supports up to 32 sources at a time
+	// For more parts, we need to compose in batches
+	if len(partKeys) <= 32 {
+		// Simple case: compose all parts directly
+		var sources []*storage.ObjectHandle
+		for _, key := range partKeys {
+			sources = append(sources, bkt.Object(key))
+		}
+
+		composer := targetObj.ComposerFrom(sources...)
+		if _, err := composer.Run(ctx); err != nil {
+			a.cleanupGCSParts(ctx, bkt, partKeys)
+			return &filekit.PathError{
+				Op:   "complete-upload",
+				Path: info.path,
+				Err:  fmt.Errorf("failed to compose parts: %w", err),
+			}
+		}
+	} else {
+		// Complex case: iterative composition
+		if err := a.composeIteratively(ctx, bkt, partKeys, targetKey); err != nil {
+			a.cleanupGCSParts(ctx, bkt, partKeys)
+			return &filekit.PathError{
+				Op:   "complete-upload",
+				Path: info.path,
+				Err:  err,
+			}
+		}
+	}
+
+	// Clean up temporary parts
+	a.cleanupGCSParts(ctx, bkt, partKeys)
+
+	return nil
+}
+
+// composeIteratively handles composition when there are more than 32 parts
+func (a *Adapter) composeIteratively(ctx context.Context, bkt *storage.BucketHandle, partKeys []string, targetKey string) error {
+	const maxCompose = 32
+	tempObjects := partKeys
+
+	iteration := 0
+	for len(tempObjects) > 1 {
+		var newTempObjects []string
+
+		for i := 0; i < len(tempObjects); i += maxCompose {
+			end := i + maxCompose
+			if end > len(tempObjects) {
+				end = len(tempObjects)
+			}
+			batch := tempObjects[i:end]
+
+			if len(batch) == 1 {
+				newTempObjects = append(newTempObjects, batch[0])
+				continue
+			}
+
+			// Create intermediate object
+			var sources []*storage.ObjectHandle
+			for _, key := range batch {
+				sources = append(sources, bkt.Object(key))
+			}
+
+			var intermediateKey string
+			if len(tempObjects) <= maxCompose {
+				// This is the final compose, write to target
+				intermediateKey = targetKey
+			} else {
+				intermediateKey = fmt.Sprintf("%s_intermediate_%d_%d", targetKey, iteration, i/maxCompose)
+			}
+
+			composer := bkt.Object(intermediateKey).ComposerFrom(sources...)
+			if _, err := composer.Run(ctx); err != nil {
+				return fmt.Errorf("failed to compose batch: %w", err)
+			}
+
+			newTempObjects = append(newTempObjects, intermediateKey)
+		}
+
+		// Clean up intermediate objects from previous iteration (not original parts)
+		if iteration > 0 {
+			for _, key := range tempObjects {
+				if strings.Contains(key, "_intermediate_") {
+					bkt.Object(key).Delete(ctx)
+				}
+			}
+		}
+
+		tempObjects = newTempObjects
+		iteration++
+	}
+
+	// If we ended with a single intermediate object that's not the target, rename it
+	if len(tempObjects) == 1 && tempObjects[0] != targetKey {
+		src := bkt.Object(tempObjects[0])
+		dst := bkt.Object(targetKey)
+		if _, err := dst.CopierFrom(src).Run(ctx); err != nil {
+			return fmt.Errorf("failed to copy final result: %w", err)
+		}
+		src.Delete(ctx)
+	}
+
+	return nil
+}
+
+// cleanupGCSParts removes temporary part objects
+func (a *Adapter) cleanupGCSParts(ctx context.Context, bkt *storage.BucketHandle, partKeys []string) {
+	for _, key := range partKeys {
+		bkt.Object(key).Delete(ctx)
+	}
+}
+
+// extractPartNumber extracts the part number from a part key
+func extractPartNumber(key, prefix string) int {
+	numStr := strings.TrimPrefix(key, prefix)
+	num, _ := strconv.Atoi(numStr)
+	return num
+}
+
+// AbortUpload cancels a chunked upload and cleans up temporary objects.
+func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
+	// Get and remove upload info
+	gcsUploadRegistry.Lock()
+	info, ok := gcsUploadRegistry.uploads[uploadID]
+	if ok {
+		delete(gcsUploadRegistry.uploads, uploadID)
+	}
+	gcsUploadRegistry.Unlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "abort-upload",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// List and delete all part objects
+	bkt := a.client.Bucket(a.bucket)
+	query := &storage.Query{Prefix: info.partsPrefix}
+	it := bkt.Objects(ctx, query)
+
+	for {
+		attrs, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return &filekit.PathError{
+				Op:   "abort-upload",
+				Path: uploadID,
+				Err:  err,
+			}
+		}
+		bkt.Object(attrs.Name).Delete(ctx)
+	}
+
+	return nil
+}
+
 // Ensure Adapter implements required and optional interfaces
 var (
-	_ filekit.FileSystem  = (*Adapter)(nil)
-	_ filekit.FileReader  = (*Adapter)(nil)
-	_ filekit.FileWriter  = (*Adapter)(nil)
-	_ filekit.CanCopy     = (*Adapter)(nil)
-	_ filekit.CanMove     = (*Adapter)(nil)
-	_ filekit.CanSignURL  = (*Adapter)(nil)
-	_ filekit.CanChecksum = (*Adapter)(nil)
-	_ filekit.CanWatch    = (*Adapter)(nil)
+	_ filekit.FileSystem      = (*Adapter)(nil)
+	_ filekit.FileReader      = (*Adapter)(nil)
+	_ filekit.FileWriter      = (*Adapter)(nil)
+	_ filekit.CanCopy         = (*Adapter)(nil)
+	_ filekit.CanMove         = (*Adapter)(nil)
+	_ filekit.CanSignURL      = (*Adapter)(nil)
+	_ filekit.CanChecksum     = (*Adapter)(nil)
+	_ filekit.CanWatch        = (*Adapter)(nil)
+	_ filekit.ChunkedUploader = (*Adapter)(nil)
 )

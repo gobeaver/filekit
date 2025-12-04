@@ -2,6 +2,9 @@ package azure
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -9,13 +12,16 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
 	"github.com/gobeaver/filekit"
@@ -871,14 +877,251 @@ func azureMatchesGlobFilter(filePath, filter string) bool {
 	return matched
 }
 
+// ============================================================================
+// Chunked Upload Implementation (using Azure Block Blobs)
+// ============================================================================
+
+// azureUploadInfo stores metadata for an in-progress chunked upload.
+type azureUploadInfo struct {
+	path     string   // Target blob path
+	blockIDs []string // List of block IDs in order
+	adapter  *Adapter
+	mu       sync.Mutex
+}
+
+// azureUploadRegistry is a thread-safe registry for in-progress uploads.
+var azureUploadRegistry = struct {
+	sync.RWMutex
+	uploads map[string]*azureUploadInfo
+}{
+	uploads: make(map[string]*azureUploadInfo),
+}
+
+// generateAzureUploadID creates a unique upload identifier.
+func generateAzureUploadID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// generateBlockID creates a base64-encoded block ID for Azure.
+// Azure requires block IDs to be base64-encoded and all the same length.
+func generateBlockID(partNumber int) string {
+	// Use a fixed-width format to ensure consistent block ID lengths
+	id := fmt.Sprintf("block-%010d", partNumber)
+	return base64.StdEncoding.EncodeToString([]byte(id))
+}
+
+// InitiateUpload starts a chunked upload process and returns an upload ID.
+// Uses Azure Block Blob's native chunked upload mechanism.
+func (a *Adapter) InitiateUpload(ctx context.Context, filePath string) (string, error) {
+	// Generate a unique upload ID
+	uploadID, err := generateAzureUploadID()
+	if err != nil {
+		return "", &filekit.PathError{
+			Op:   "initiate-upload",
+			Path: filePath,
+			Err:  err,
+		}
+	}
+
+	// Store upload info
+	azureUploadRegistry.Lock()
+	azureUploadRegistry.uploads[uploadID] = &azureUploadInfo{
+		path:     filePath,
+		blockIDs: make([]string, 0),
+		adapter:  a,
+	}
+	azureUploadRegistry.Unlock()
+
+	return uploadID, nil
+}
+
+// UploadPart uploads a part of a file using Azure's StageBlock.
+func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) error {
+	// Validate part number
+	if partNumber < 1 {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("part number must be >= 1, got %d", partNumber),
+		}
+	}
+
+	// Get upload info
+	azureUploadRegistry.RLock()
+	info, ok := azureUploadRegistry.uploads[uploadID]
+	azureUploadRegistry.RUnlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// Generate block ID
+	blockID := generateBlockID(partNumber)
+
+	// Get block blob client
+	blobName := path.Join(a.prefix, info.path)
+	blockBlobClient := a.client.ServiceClient().NewContainerClient(a.containerName).NewBlockBlobClient(blobName)
+
+	// Stage the block
+	_, err := blockBlobClient.StageBlock(ctx, blockID, &readSeekCloser{data: data}, nil)
+	if err != nil {
+		return &filekit.PathError{
+			Op:   "upload-part",
+			Path: uploadID,
+			Err:  fmt.Errorf("failed to stage block: %w", err),
+		}
+	}
+
+	// Record the block ID (thread-safe)
+	info.mu.Lock()
+	// Ensure we have enough space in the slice
+	for len(info.blockIDs) < partNumber {
+		info.blockIDs = append(info.blockIDs, "")
+	}
+	info.blockIDs[partNumber-1] = blockID
+	info.mu.Unlock()
+
+	return nil
+}
+
+// readSeekCloser wraps a byte slice to implement io.ReadSeekCloser
+type readSeekCloser struct {
+	data   []byte
+	offset int64
+}
+
+func (r *readSeekCloser) Read(p []byte) (n int, err error) {
+	if r.offset >= int64(len(r.data)) {
+		return 0, io.EOF
+	}
+	n = copy(p, r.data[r.offset:])
+	r.offset += int64(n)
+	return n, nil
+}
+
+func (r *readSeekCloser) Seek(offset int64, whence int) (int64, error) {
+	var newOffset int64
+	switch whence {
+	case io.SeekStart:
+		newOffset = offset
+	case io.SeekCurrent:
+		newOffset = r.offset + offset
+	case io.SeekEnd:
+		newOffset = int64(len(r.data)) + offset
+	default:
+		return 0, errors.New("invalid whence")
+	}
+	if newOffset < 0 {
+		return 0, errors.New("negative position")
+	}
+	r.offset = newOffset
+	return newOffset, nil
+}
+
+func (r *readSeekCloser) Close() error {
+	return nil
+}
+
+// CompleteUpload finalizes a chunked upload by committing all blocks.
+func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
+	// Get and remove upload info
+	azureUploadRegistry.Lock()
+	info, ok := azureUploadRegistry.uploads[uploadID]
+	if ok {
+		delete(azureUploadRegistry.uploads, uploadID)
+	}
+	azureUploadRegistry.Unlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// Filter out empty block IDs and collect valid ones
+	info.mu.Lock()
+	var validBlockIDs []string
+	for _, id := range info.blockIDs {
+		if id != "" {
+			validBlockIDs = append(validBlockIDs, id)
+		}
+	}
+	info.mu.Unlock()
+
+	if len(validBlockIDs) == 0 {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: uploadID,
+			Err:  errors.New("no parts uploaded"),
+		}
+	}
+
+	// Sort block IDs by their part number (they're base64 encoded, but in order)
+	sort.Strings(validBlockIDs)
+
+	// Get block blob client
+	blobName := path.Join(a.prefix, info.path)
+	blockBlobClient := a.client.ServiceClient().NewContainerClient(a.containerName).NewBlockBlobClient(blobName)
+
+	// Commit the block list
+	_, err := blockBlobClient.CommitBlockList(ctx, validBlockIDs, &blockblob.CommitBlockListOptions{})
+	if err != nil {
+		return &filekit.PathError{
+			Op:   "complete-upload",
+			Path: info.path,
+			Err:  fmt.Errorf("failed to commit block list: %w", err),
+		}
+	}
+
+	return nil
+}
+
+// AbortUpload cancels a chunked upload.
+// For Azure Block Blobs, uncommitted blocks are automatically cleaned up after 7 days.
+func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
+	// Get and remove upload info
+	azureUploadRegistry.Lock()
+	info, ok := azureUploadRegistry.uploads[uploadID]
+	if ok {
+		delete(azureUploadRegistry.uploads, uploadID)
+	}
+	azureUploadRegistry.Unlock()
+
+	if !ok {
+		return &filekit.PathError{
+			Op:   "abort-upload",
+			Path: uploadID,
+			Err:  fmt.Errorf("upload not found: %s", uploadID),
+		}
+	}
+
+	// Azure automatically cleans up uncommitted blocks after 7 days
+	// We could try to delete any partially committed blob, but it may not exist yet
+	blobName := path.Join(a.prefix, info.path)
+	_, _ = a.client.DeleteBlob(ctx, a.containerName, blobName, nil)
+
+	return nil
+}
+
 // Ensure Adapter implements required and optional interfaces
 var (
-	_ filekit.FileSystem  = (*Adapter)(nil)
-	_ filekit.FileReader  = (*Adapter)(nil)
-	_ filekit.FileWriter  = (*Adapter)(nil)
-	_ filekit.CanCopy     = (*Adapter)(nil)
-	_ filekit.CanMove     = (*Adapter)(nil)
-	_ filekit.CanSignURL  = (*Adapter)(nil)
-	_ filekit.CanChecksum = (*Adapter)(nil)
-	_ filekit.CanWatch    = (*Adapter)(nil)
+	_ filekit.FileSystem      = (*Adapter)(nil)
+	_ filekit.FileReader      = (*Adapter)(nil)
+	_ filekit.FileWriter      = (*Adapter)(nil)
+	_ filekit.CanCopy         = (*Adapter)(nil)
+	_ filekit.CanMove         = (*Adapter)(nil)
+	_ filekit.CanSignURL      = (*Adapter)(nil)
+	_ filekit.CanChecksum     = (*Adapter)(nil)
+	_ filekit.CanWatch        = (*Adapter)(nil)
+	_ filekit.ChunkedUploader = (*Adapter)(nil)
 )
