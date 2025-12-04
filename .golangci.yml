@@ -1,0 +1,86 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    # Bug Prevention & Security
+    - errcheck       # Unchecked errors (crashes/data loss)
+    - errorlint      # Enforce errors.Is/As instead of == comparison
+    - gosec          # Security vulnerabilities
+    - govet          # Suspicious constructs
+    - staticcheck    # Comprehensive static analysis
+    - typecheck      # Type errors
+    - bidichk        # Dangerous unicode characters
+
+    # Style & Conventions
+    - revive         # Style and naming conventions
+    - gosimple       # Go idioms
+    - gocritic       # Comprehensive checks (mixed receivers, performance, etc.)
+    - gofmt          # Standard formatting
+    - goimports      # Import organization
+
+    # Code Quality
+    - unused         # Dead code
+    - ineffassign    # Wasted assignments
+    - unconvert      # Unnecessary type conversions
+    - unparam        # Unused function parameters
+    - nakedret       # Naked returns in long functions
+    - nilerr         # Suspicious nil error returns
+    - predeclared    # Shadows predeclared identifiers
+
+    # Resource Leak Detection (Critical for filesystem library)
+    - bodyclose      # HTTP response bodies must be closed
+    - noctx          # HTTP requests must use context
+
+linters-settings:
+  errorlint:
+    errorf: true
+    asserts: true
+    comparison: true
+
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+      - name: package-comments
+        severity: warning
+      - name: var-naming
+        severity: warning
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      - commentedOutCode
+      - whyNoLint
+      - unnamedResult
+
+  nakedret:
+    max-func-lines: 30
+
+  unparam:
+    check-exported: false  # Don't check exported functions (public API)
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Test files - relax rules
+    - path: _test\.go
+      linters:
+        - gosec
+        - dupl
+        - gocyclo
+        - unparam
+        - bodyclose
+        - noctx
+
+    # Examples - allow simpler code
+    - path: examples/
+      linters:
+        - errcheck
+        - gosec

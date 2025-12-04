@@ -1,0 +1,32 @@
+# OS generated files
+.DS_Store
+**/.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Project specific
+temp/
+CLAUDE.md
+.claude/
+.gemini/
+gemini.md
+.kiro/
+kiro.md
+
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Environment
+.env
+.env.local
+*.local

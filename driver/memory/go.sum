@@ -1,0 +1,6 @@
+github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+github.com/gobeaver/beaver-kit/config v0.1.0 h1:/5AIRUTw8ULHnxBLkqXPogdgbyVRJyQZpvrkVwI1NXw=
+github.com/gobeaver/beaver-kit/config v0.1.0/go.mod h1:YrBZTnCpsd3xDH3WjEATYZr+oHZK3I5YlUvEqGlpzA0=
+github.com/gobwas/glob v0.2.3 h1:A4xDbljILXROh+kObIiy5kIaPYD8e96x1tgBhUI5J+Y=
+github.com/gobwas/glob v0.2.3/go.mod h1:d3Ez4x06l9bZtSvzIay5+Yzi0fmZzPgnTbPcKjJAkT8=
