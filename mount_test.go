@@ -6,12 +6,14 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // mockFS is a simple mock filesystem for testing
 type mockFS struct {
+	mu      sync.RWMutex
 	name    string
 	files   map[string][]byte
 	dirs    map[string]bool
@@ -27,17 +29,21 @@ func newMockFS(name string) *mockFS {
 	}
 }
 
-func (m *mockFS) Write(ctx context.Context, path string, content io.Reader, options ...Option) error {
+func (m *mockFS) Write(ctx context.Context, path string, content io.Reader, options ...Option) (*WriteResult, error) {
 	data, err := io.ReadAll(content)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	m.mu.Lock()
 	m.files[path] = data
-	return nil
+	m.mu.Unlock()
+	return &WriteResult{BytesWritten: int64(len(data))}, nil
 }
 
 func (m *mockFS) Read(ctx context.Context, path string) (io.ReadCloser, error) {
+	m.mu.RLock()
 	data, ok := m.files[path]
+	m.mu.RUnlock()
 	if !ok {
 		return nil, errors.New("file not found")
 	}
@@ -45,7 +51,9 @@ func (m *mockFS) Read(ctx context.Context, path string) (io.ReadCloser, error) {
 }
 
 func (m *mockFS) ReadAll(ctx context.Context, path string) ([]byte, error) {
+	m.mu.RLock()
 	data, ok := m.files[path]
+	m.mu.RUnlock()
 	if !ok {
 		return nil, errors.New("file not found")
 	}
@@ -53,6 +61,8 @@ func (m *mockFS) ReadAll(ctx context.Context, path string) ([]byte, error) {
 }
 
 func (m *mockFS) Delete(ctx context.Context, path string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, ok := m.files[path]; !ok {
 		return errors.New("file not found")
 	}
@@ -61,17 +71,23 @@ func (m *mockFS) Delete(ctx context.Context, path string) error {
 }
 
 func (m *mockFS) FileExists(ctx context.Context, path string) (bool, error) {
+	m.mu.RLock()
 	_, ok := m.files[path]
+	m.mu.RUnlock()
 	return ok, nil
 }
 
 func (m *mockFS) DirExists(ctx context.Context, path string) (bool, error) {
+	m.mu.RLock()
 	_, ok := m.dirs[path]
+	m.mu.RUnlock()
 	return ok, nil
 }
 
 func (m *mockFS) Stat(ctx context.Context, path string) (*FileInfo, error) {
+	m.mu.RLock()
 	data, ok := m.files[path]
+	m.mu.RUnlock()
 	if !ok {
 		return nil, errors.New("file not found")
 	}
@@ -86,6 +102,8 @@ func (m *mockFS) Stat(ctx context.Context, path string) (*FileInfo, error) {
 }
 
 func (m *mockFS) ListContents(ctx context.Context, path string, recursive bool) ([]FileInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var files []FileInfo
 	for filePath, data := range m.files {
 		if path == "" || strings.HasPrefix(filePath, path) {
@@ -101,12 +119,16 @@ func (m *mockFS) ListContents(ctx context.Context, path string, recursive bool) 
 }
 
 func (m *mockFS) CreateDir(ctx context.Context, path string) error {
+	m.mu.Lock()
 	m.dirs[path] = true
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *mockFS) DeleteDir(ctx context.Context, path string) error {
+	m.mu.Lock()
 	delete(m.dirs, path)
+	m.mu.Unlock()
 	return nil
 }
 
@@ -320,7 +342,7 @@ func TestUploadDownload(t *testing.T) {
 
 	// Write to local
 	content := "hello local"
-	err := mm.Write(ctx, "/local/test.txt", strings.NewReader(content))
+	_, err := mm.Write(ctx, "/local/test.txt", strings.NewReader(content))
 	if err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
@@ -343,7 +365,7 @@ func TestUploadDownload(t *testing.T) {
 
 	// Write to cloud
 	cloudContent := "hello cloud"
-	err = mm.Write(ctx, "/cloud/file.txt", strings.NewReader(cloudContent))
+	_, err = mm.Write(ctx, "/cloud/file.txt", strings.NewReader(cloudContent))
 	if err != nil {
 		t.Fatalf("write to cloud failed: %v", err)
 	}
@@ -366,7 +388,7 @@ func TestNestedMounts(t *testing.T) {
 	}
 
 	// Write to /cloud/archive should go to archive FS
-	err := mm.Write(ctx, "/cloud/archive/old.txt", strings.NewReader("archived"))
+	_, err := mm.Write(ctx, "/cloud/archive/old.txt", strings.NewReader("archived"))
 	if err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
@@ -380,7 +402,7 @@ func TestNestedMounts(t *testing.T) {
 	}
 
 	// Write to /cloud should go to cloud FS
-	err = mm.Write(ctx, "/cloud/new.txt", strings.NewReader("cloud file"))
+	_, err = mm.Write(ctx, "/cloud/new.txt", strings.NewReader("cloud file"))
 	if err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
@@ -398,7 +420,7 @@ func TestDelete(t *testing.T) {
 	}
 
 	// Write then delete
-	if err := mm.Write(ctx, "/local/test.txt", strings.NewReader("content")); err != nil {
+	if _, err := mm.Write(ctx, "/local/test.txt", strings.NewReader("content")); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 	err := mm.Delete(ctx, "/local/test.txt")
@@ -420,7 +442,7 @@ func TestExists(t *testing.T) {
 		t.Fatalf("mount failed: %v", err)
 	}
 
-	if err := mm.Write(ctx, "/local/test.txt", strings.NewReader("content")); err != nil {
+	if _, err := mm.Write(ctx, "/local/test.txt", strings.NewReader("content")); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 
@@ -450,7 +472,7 @@ func TestFileInfo(t *testing.T) {
 	}
 
 	content := "hello world"
-	if err := mm.Write(ctx, "/local/test.txt", strings.NewReader(content)); err != nil {
+	if _, err := mm.Write(ctx, "/local/test.txt", strings.NewReader(content)); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 
@@ -501,10 +523,10 @@ func TestListMountContent(t *testing.T) {
 		t.Fatalf("mount failed: %v", err)
 	}
 
-	if err := mm.Write(ctx, "/local/file1.txt", strings.NewReader("1")); err != nil {
+	if _, err := mm.Write(ctx, "/local/file1.txt", strings.NewReader("1")); err != nil {
 		t.Fatalf("write file1 failed: %v", err)
 	}
-	if err := mm.Write(ctx, "/local/file2.txt", strings.NewReader("2")); err != nil {
+	if _, err := mm.Write(ctx, "/local/file2.txt", strings.NewReader("2")); err != nil {
 		t.Fatalf("write file2 failed: %v", err)
 	}
 
@@ -716,7 +738,7 @@ func TestConcurrency(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(i int) {
 			path := "/local/file" + string(rune('0'+i)) + ".txt"
-			_ = mm.Write(ctx, path, strings.NewReader("content"))
+			_, _ = mm.Write(ctx, path, strings.NewReader("content"))
 			done <- true
 		}(i)
 	}

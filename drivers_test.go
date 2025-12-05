@@ -34,19 +34,22 @@ type testLocalFS struct {
 	basePath string
 }
 
-func (fs *testLocalFS) Write(ctx context.Context, path string, reader io.Reader, options ...Option) error {
+func (fs *testLocalFS) Write(ctx context.Context, path string, reader io.Reader, options ...Option) (*WriteResult, error) {
 	fullPath := filepath.Join(fs.basePath, path)
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return nil, err
 	}
 
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return os.WriteFile(fullPath, data, 0o644)
+	if err := os.WriteFile(fullPath, data, 0o644); err != nil {
+		return nil, err
+	}
+	return &WriteResult{BytesWritten: int64(len(data))}, nil
 }
 
 func (fs *testLocalFS) Read(ctx context.Context, path string) (io.ReadCloser, error) {
@@ -166,16 +169,16 @@ type testS3FS struct {
 	files  map[string]string
 }
 
-func (fs *testS3FS) Write(ctx context.Context, path string, reader io.Reader, options ...Option) error {
+func (fs *testS3FS) Write(ctx context.Context, path string, reader io.Reader, options ...Option) (*WriteResult, error) {
 	if fs.files == nil {
 		fs.files = make(map[string]string)
 	}
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fs.files[path] = string(data)
-	return nil
+	return &WriteResult{BytesWritten: int64(len(data))}, nil
 }
 
 func (fs *testS3FS) Read(ctx context.Context, path string) (io.ReadCloser, error) {

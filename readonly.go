@@ -179,9 +179,9 @@ func (r *ReadOnlyFileSystem) ListContents(ctx context.Context, path string, recu
 // ============================================================================
 
 // Write returns ErrReadOnly.
-func (r *ReadOnlyFileSystem) Write(ctx context.Context, path string, content io.Reader, options ...Option) error {
+func (r *ReadOnlyFileSystem) Write(ctx context.Context, path string, content io.Reader, options ...Option) (*WriteResult, error) {
 	if err := r.readOnlyError("write", path); err != nil {
-		return err
+		return nil, err
 	}
 	// Handler allowed the operation
 	return r.fs.Write(ctx, path, content, options...)

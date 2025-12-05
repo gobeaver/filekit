@@ -16,9 +16,13 @@ const (
 	ErrorTypeContent   ValidationErrorType = "content"
 )
 
-// ValidationError represents a custom error for file validation
+// ValidationError represents a custom error for file validation.
+// It implements the error interface and includes the error type for programmatic handling.
 type ValidationError struct {
-	Type    ValidationErrorType
+	// Type categorizes the validation failure (size, mime, filename, extension, content).
+	Type ValidationErrorType
+
+	// Message is the human-readable error description.
 	Message string
 }
 

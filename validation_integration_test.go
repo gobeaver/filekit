@@ -167,7 +167,7 @@ func TestValidationIntegration(t *testing.T) {
 				opts = append(opts, WithContentType(tt.contentType))
 			}
 
-			err = fs.Write(ctx, tt.filename, content, opts...)
+			_, err = fs.Write(ctx, tt.filename, content, opts...)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Write() error = %v, wantErr %v", err, tt.wantErr)
@@ -225,14 +225,14 @@ func TestValidationWithEncryption(t *testing.T) {
 
 	// 1. Try to write a file that violates validation
 	largeContent := strings.Repeat("a", 2000) // Exceeds 1024 byte limit
-	err = fs.Write(ctx, "large.txt", strings.NewReader(largeContent), WithContentType("text/plain"))
+	_, err = fs.Write(ctx, "large.txt", strings.NewReader(largeContent), WithContentType("text/plain"))
 	if err == nil {
 		t.Error("Expected validation error for large file")
 	}
 
 	// 2. Write a valid file
 	validContent := "This is valid content"
-	err = fs.Write(ctx, "valid.txt", strings.NewReader(validContent), WithContentType("text/plain"))
+	_, err = fs.Write(ctx, "valid.txt", strings.NewReader(validContent), WithContentType("text/plain"))
 	if err != nil {
 		t.Errorf("Write of valid file failed: %v", err)
 	}

@@ -28,5 +28,6 @@ func (s *streamManager) Stream(ctx context.Context, path string) (io.ReadCloser,
 }
 
 func (s *streamManager) StreamWrite(ctx context.Context, path string, reader io.Reader) error {
-	return s.fs.Write(ctx, path, reader)
+	_, err := s.fs.Write(ctx, path, reader)
+	return err
 }

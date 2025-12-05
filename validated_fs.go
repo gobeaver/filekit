@@ -25,7 +25,7 @@ func NewValidatedFileSystem(fs FileSystem, validator filevalidator.Validator) *V
 }
 
 // Write implements FileSystem with validation
-func (v *ValidatedFileSystem) Write(ctx context.Context, path string, content io.Reader, options ...Option) error {
+func (v *ValidatedFileSystem) Write(ctx context.Context, path string, content io.Reader, options ...Option) (*WriteResult, error) {
 	// Process options
 	opts := &Options{}
 	for _, option := range options {
@@ -46,17 +46,17 @@ func (v *ValidatedFileSystem) Write(ctx context.Context, path string, content io
 			// We need to know the size for validation
 			size, err := getStreamSize(seeker)
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			// Validate using the seeker
 			if err := validator.ValidateReader(content, filepath.Base(path), size); err != nil {
-				return err
+				return nil, err
 			}
 
 			// Reset seeker to start for write
 			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-				return err
+				return nil, err
 			}
 		} else {
 			// For non-seekable streams (like HTTP body), we have to be careful.
@@ -67,13 +67,13 @@ func (v *ValidatedFileSystem) Write(ctx context.Context, path string, content io
 			header := make([]byte, 512)
 			n, err := io.ReadFull(content, header)
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-				return err
+				return nil, err
 			}
 			header = header[:n]
 
 			// 2. Perform "Best Effort" validation using the header
 			if err := validator.ValidateBytes(header, filepath.Base(path)); err != nil {
-				return err
+				return nil, err
 			}
 
 			// 3. Reconstruct the reader for Write

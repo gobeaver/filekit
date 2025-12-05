@@ -60,7 +60,7 @@ func BenchmarkFilesystem(b *testing.B) {
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					reader := strings.NewReader(content)
-					err := fs.Write(ctx, "bench.txt", reader, WithContentType("text/plain"))
+					_, err := fs.Write(ctx, "bench.txt", reader, WithContentType("text/plain"))
 					if err != nil {
 						b.Fatalf("Write failed: %v", err)
 					}
@@ -69,7 +69,7 @@ func BenchmarkFilesystem(b *testing.B) {
 			})
 
 			// Setup file for download benchmark
-			_ = fs.Write(ctx, "bench.txt", strings.NewReader(content), WithContentType("text/plain"))
+			_, _ = fs.Write(ctx, "bench.txt", strings.NewReader(content), WithContentType("text/plain"))
 
 			b.Run("read", func(b *testing.B) {
 				b.ResetTimer()

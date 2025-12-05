@@ -37,7 +37,7 @@ func TestWrite(t *testing.T) {
 		a := New()
 		content := "hello world"
 
-		err := a.Write(ctx, "test.txt", strings.NewReader(content))
+		_, err := a.Write(ctx, "test.txt", strings.NewReader(content))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -60,7 +60,7 @@ func TestWrite(t *testing.T) {
 	t.Run("fails on path traversal", func(t *testing.T) {
 		a := New()
 
-		err := a.Write(ctx, "../etc/passwd", strings.NewReader("malicious"))
+		_, err := a.Write(ctx, "../etc/passwd", strings.NewReader("malicious"))
 		if err == nil {
 			t.Fatal("expected error for path traversal")
 		}
@@ -72,7 +72,7 @@ func TestWrite(t *testing.T) {
 	t.Run("respects max size limit", func(t *testing.T) {
 		a := New(Config{MaxSize: 10})
 
-		err := a.Write(ctx, "large.txt", strings.NewReader("this is too large"))
+		_, err := a.Write(ctx, "large.txt", strings.NewReader("this is too large"))
 		if err == nil {
 			t.Fatal("expected error for exceeding max size")
 		}
@@ -81,12 +81,12 @@ func TestWrite(t *testing.T) {
 	t.Run("prevents overwrite by default", func(t *testing.T) {
 		a := New()
 
-		err := a.Write(ctx, "test.txt", strings.NewReader("first"))
+		_, err := a.Write(ctx, "test.txt", strings.NewReader("first"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		err = a.Write(ctx, "test.txt", strings.NewReader("second"))
+		_, err = a.Write(ctx, "test.txt", strings.NewReader("second"))
 		if err == nil {
 			t.Fatal("expected error for overwrite")
 		}
@@ -95,12 +95,12 @@ func TestWrite(t *testing.T) {
 	t.Run("allows overwrite with option", func(t *testing.T) {
 		a := New()
 
-		err := a.Write(ctx, "test.txt", strings.NewReader("first"))
+		_, err := a.Write(ctx, "test.txt", strings.NewReader("first"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		err = a.Write(ctx, "test.txt", strings.NewReader("second"), filekit.WithOverwrite(true))
+		_, err = a.Write(ctx, "test.txt", strings.NewReader("second"), filekit.WithOverwrite(true))
 		if err != nil {
 			t.Fatalf("unexpected error with overwrite: %v", err)
 		}
@@ -121,7 +121,7 @@ func TestWrite(t *testing.T) {
 	t.Run("creates parent directories", func(t *testing.T) {
 		a := New()
 
-		err := a.Write(ctx, "a/b/c/test.txt", strings.NewReader("nested"))
+		_, err := a.Write(ctx, "a/b/c/test.txt", strings.NewReader("nested"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -146,7 +146,7 @@ func TestWrite(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := a.Write(ctx, "test.txt", strings.NewReader("content"))
+		_, err := a.Write(ctx, "test.txt", strings.NewReader("content"))
 		if err != context.Canceled {
 			t.Errorf("expected context.Canceled, got: %v", err)
 		}
@@ -155,7 +155,7 @@ func TestWrite(t *testing.T) {
 	t.Run("sets content type from option", func(t *testing.T) {
 		a := New()
 
-		err := a.Write(ctx, "data", strings.NewReader("{}"), filekit.WithContentType("application/json"))
+		_, err := a.Write(ctx, "data", strings.NewReader("{}"), filekit.WithContentType("application/json"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestWrite(t *testing.T) {
 	t.Run("detects content type from extension", func(t *testing.T) {
 		a := New()
 
-		err := a.Write(ctx, "image.png", strings.NewReader("fake png"))
+		_, err := a.Write(ctx, "image.png", strings.NewReader("fake png"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

@@ -3,6 +3,7 @@ package azure
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -68,7 +69,7 @@ func New(client *azblob.Client, containerName string, accountName, accountKey st
 }
 
 // Write implements filekit.FileWriter
-func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) error {
+func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) (*filekit.WriteResult, error) {
 	opts := processOptions(options...)
 
 	// Combine prefix and path
@@ -79,14 +80,10 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 		blobClient := a.client.ServiceClient().NewContainerClient(a.containerName).NewBlobClient(blobName)
 		_, err := blobClient.GetProperties(ctx, nil)
 		if err == nil {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: filePath,
-				Err:  filekit.ErrExist,
-			}
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
 		}
 		if !bloberror.HasCode(err, bloberror.BlobNotFound) {
-			return mapAzureError("write", filePath, err)
+			return nil, mapAzureError("write", filePath, err)
 		}
 	}
 
@@ -99,12 +96,12 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	// Read content into buffer (Azure SDK requires content length for some operations)
 	data, err := io.ReadAll(content)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", filePath, err)
 	}
+
+	// Calculate checksum
+	hash := sha256.Sum256(data)
+	checksum := hex.EncodeToString(hash[:])
 
 	// Upload options
 	uploadOpts := &azblob.UploadBufferOptions{
@@ -129,15 +126,30 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	}
 
 	// Upload the blob
-	_, err = a.client.UploadBuffer(ctx, a.containerName, blobName, data, uploadOpts)
+	resp, err := a.client.UploadBuffer(ctx, a.containerName, blobName, data, uploadOpts)
 	if err != nil {
-		return mapAzureError("write", filePath, err)
+		return nil, mapAzureError("write", filePath, err)
 	}
 
-	// Set access tier based on visibility (Azure doesn't have ACL like S3)
-	// For public access, you need to configure container-level access policy
+	// Get ETag and timestamp from response
+	var etag string
+	var serverTime time.Time
+	if resp.ETag != nil {
+		etag = string(*resp.ETag)
+	}
+	if resp.LastModified != nil {
+		serverTime = *resp.LastModified
+	} else {
+		serverTime = time.Now()
+	}
 
-	return nil
+	return &filekit.WriteResult{
+		BytesWritten:      int64(len(data)),
+		Checksum:          checksum,
+		ChecksumAlgorithm: filekit.ChecksumSHA256,
+		ETag:              etag,
+		ServerTimestamp:   serverTime,
+	}, nil
 }
 
 // Read implements filekit.FileReader
@@ -506,14 +518,10 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 }
 
 // WriteFile writes a local file to the storage
-func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) error {
+func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "writefile",
-			Path: localPath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("writefile", localPath, err)
 	}
 	defer file.Close()
 

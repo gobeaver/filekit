@@ -8,17 +8,20 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/gobeaver/beaver-kit/config v0.1.0
 	github.com/gobeaver/filekit/driver/local v0.0.0-00010101000000-000000000000
+	github.com/gobeaver/filekit/driver/memory v0.0.0-20251204124314-895ab7297fff
 	github.com/gobeaver/filekit/filevalidator v0.0.0
 )
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/gobwas/glob v0.2.3 // indirect
 	golang.org/x/sys v0.13.0 // indirect
 )
 
 // Local submodules
 replace (
 	github.com/gobeaver/filekit/driver/local => ./driver/local
+	github.com/gobeaver/filekit/driver/memory => ./driver/memory
 	github.com/gobeaver/filekit/filevalidator => ./filevalidator
 )
 

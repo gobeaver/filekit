@@ -49,7 +49,7 @@ func basicExample(fs filekit.FileSystem) {
 
 	// Write a file
 	content := strings.NewReader("Hello, World! This is a test file.")
-	err := fs.Write(ctx, "test.txt", content, filekit.WithContentType("text/plain"))
+	_, err := fs.Write(ctx, "test.txt", content, filekit.WithContentType("text/plain"))
 	if err != nil {
 		panic(err)
 	}
@@ -105,7 +105,7 @@ func directoryExample(fs filekit.FileSystem) {
 
 	// Write a file to the directory
 	content := strings.NewReader("Image data would go here")
-	err = fs.Write(ctx, "images/photo.jpg", content, filekit.WithContentType("image/jpeg"))
+	_, err = fs.Write(ctx, "images/photo.jpg", content, filekit.WithContentType("image/jpeg"))
 	if err != nil {
 		panic(err)
 	}
@@ -141,7 +141,7 @@ func metadataExample(fs filekit.FileSystem) {
 		"department": "Engineering",
 		"project":    "File System Demo",
 	}
-	err := fs.Write(ctx, "metadata.txt", content,
+	_, err := fs.Write(ctx, "metadata.txt", content,
 		filekit.WithContentType("text/plain"),
 		filekit.WithMetadata(metadata),
 	)
@@ -191,7 +191,7 @@ func validationExample(fs filekit.FileSystem) {
 
 	// Create a valid file
 	validContent := strings.NewReader("This is a valid text file")
-	err := validatedFS.Write(ctx, "valid.txt", validContent, filekit.WithContentType("text/plain"))
+	_, err := validatedFS.Write(ctx, "valid.txt", validContent, filekit.WithContentType("text/plain"))
 	if err != nil {
 		fmt.Printf("Upload error: %v\n", err)
 	} else {
@@ -200,7 +200,7 @@ func validationExample(fs filekit.FileSystem) {
 
 	// Try to create an invalid file (wrong extension)
 	invalidContent := strings.NewReader("This file has the wrong extension")
-	err = validatedFS.Write(ctx, "invalid.png", invalidContent, filekit.WithContentType("text/plain"))
+	_, err = validatedFS.Write(ctx, "invalid.png", invalidContent, filekit.WithContentType("text/plain"))
 	if err != nil {
 		fmt.Printf("Validation error as expected: %v\n", err)
 	} else {
@@ -211,7 +211,7 @@ func validationExample(fs filekit.FileSystem) {
 
 	// Try to upload a file that's too large
 	largeContent := strings.NewReader(strings.Repeat("x", 2*1024*1024)) // 2MB
-	err = validatedFS.Write(ctx, "large.txt", largeContent, filekit.WithContentType("text/plain"))
+	_, err = validatedFS.Write(ctx, "large.txt", largeContent, filekit.WithContentType("text/plain"))
 	if err != nil {
 		fmt.Printf("Size validation error as expected: %v\n", err)
 	} else {

@@ -1,246 +1,600 @@
 package filekit
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"sync"
 )
 
-// EncryptedFS is a wrapper around a FileSystem that encrypts and decrypts data
+// Encryption format version for forward compatibility.
+const encryptionFormatVersion byte = 1
+
+// Default chunk size for encryption (64KB plaintext per chunk).
+// Each chunk will be slightly larger after encryption due to GCM overhead.
+const defaultChunkSize = 64 * 1024
+
+// Encryption errors.
+var (
+	ErrInvalidKey           = errors.New("encryption key must be 32 bytes for AES-256")
+	ErrInvalidFormat        = errors.New("invalid encrypted file format")
+	ErrUnsupportedVersion   = errors.New("unsupported encryption format version")
+	ErrDecryptionFailed     = errors.New("decryption failed: data may be corrupted or key is wrong")
+	ErrEncryptionFailed     = errors.New("encryption failed")
+	ErrTruncatedFile        = errors.New("encrypted file is truncated")
+	ErrInvalidChunkSize     = errors.New("invalid chunk size in encrypted file")
+	ErrContextCanceled      = errors.New("operation canceled")
+	ErrInvalidNonceSize     = errors.New("invalid nonce size")
+	ErrChunkSizeTooSmall    = errors.New("chunk size must be at least 1024 bytes")
+	ErrChunkSizeTooLarge    = errors.New("chunk size must be at most 16MB")
+	ErrInvalidChunkSequence = errors.New("chunk sequence number mismatch")
+)
+
+// Buffer pools for reducing allocations.
+var (
+	// Pool for plaintext buffers (used during encryption).
+	plaintextPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, defaultChunkSize)
+			return &buf
+		},
+	}
+)
+
+// EncryptedFS wraps a FileSystem to provide transparent AES-256-GCM encryption.
+//
+// File format (version 1):
+//
+//	Header (17 bytes):
+//	  - Version (1 byte): Format version (currently 1)
+//	  - Chunk size (4 bytes): Big-endian uint32, plaintext chunk size
+//	  - Base nonce (12 bytes): Random nonce used to derive per-chunk nonces
+//
+//	Chunks (repeated until EOF):
+//	  - Chunk length (4 bytes): Big-endian uint32, length of encrypted chunk
+//	  - Chunk sequence (4 bytes): Big-endian uint32, chunk number (for nonce derivation)
+//	  - Encrypted data (variable): GCM-encrypted chunk with 16-byte auth tag
+//
+// Security properties:
+//   - Each chunk uses a unique nonce derived from: base_nonce XOR chunk_sequence
+//   - GCM provides authenticated encryption (confidentiality + integrity)
+//   - Chunk sequence prevents chunk reordering attacks
+//   - Format version allows future algorithm upgrades
 type EncryptedFS struct {
-	fs  FileSystem
-	key []byte
+	fs        FileSystem
+	key       []byte
+	chunkSize int
 }
 
-// NewEncryptedFS creates a new encrypted filesystem
-func NewEncryptedFS(fs FileSystem, key []byte) *EncryptedFS {
-	// Ensure key is 32 bytes (for AES-256)
+// EncryptedFSOption configures an EncryptedFS.
+type EncryptedFSOption func(*EncryptedFS)
+
+// WithChunkSize sets the chunk size for encryption.
+// Must be between 1KB and 16MB. Default is 64KB.
+func WithChunkSize(size int) EncryptedFSOption {
+	return func(e *EncryptedFS) {
+		e.chunkSize = size
+	}
+}
+
+// NewEncryptedFS creates a new encrypted filesystem wrapper.
+//
+// The key must be exactly 32 bytes for AES-256.
+// Returns an error if the key is invalid.
+//
+// Example:
+//
+//	key := make([]byte, 32)
+//	if _, err := rand.Read(key); err != nil {
+//	    return err
+//	}
+//	encFS, err := filekit.NewEncryptedFS(fs, key)
+//	if err != nil {
+//	    return err
+//	}
+func NewEncryptedFS(fs FileSystem, key []byte, opts ...EncryptedFSOption) (*EncryptedFS, error) {
 	if len(key) != 32 {
-		panic("encryption key must be 32 bytes")
+		return nil, ErrInvalidKey
 	}
 
-	return &EncryptedFS{
-		fs:  fs,
-		key: key,
+	e := &EncryptedFS{
+		fs:        fs,
+		key:       make([]byte, 32),
+		chunkSize: defaultChunkSize,
 	}
+
+	// Copy key to prevent external modification.
+	copy(e.key, key)
+
+	// Apply options.
+	for _, opt := range opts {
+		opt(e)
+	}
+
+	// Validate chunk size.
+	if e.chunkSize < 1024 {
+		return nil, ErrChunkSizeTooSmall
+	}
+	if e.chunkSize > 16*1024*1024 {
+		return nil, ErrChunkSizeTooLarge
+	}
+
+	return e, nil
 }
 
-// Write encrypts the content before writing
-func (e *EncryptedFS) Write(ctx context.Context, path string, content io.Reader, options ...Option) error {
-	// Create a pipe for streaming
-	pr, pw := io.Pipe()
-
-	// Start encryption in a separate goroutine
-	go func() {
-		var err error
-		defer func() {
-			if err != nil {
-				pw.CloseWithError(err)
-			} else {
-				pw.Close()
-			}
-		}()
-
-		// Create a new AES cipher
-		block, err := aes.NewCipher(e.key)
-		if err != nil {
-			return
+// Write encrypts content and writes it to the underlying filesystem.
+func (e *EncryptedFS) Write(ctx context.Context, path string, content io.Reader, options ...Option) (*WriteResult, error) {
+	// Check context before starting.
+	if err := ctx.Err(); err != nil {
+		return nil, &PathError{
+			Op:   "encrypt",
+			Path: path,
+			Err:  err,
+			Code: ErrCodeCancelled,
 		}
-
-		// Create a new GCM cipher
-		gcm, err := cipher.NewGCM(block)
-		if err != nil {
-			return
-		}
-
-		// Create a nonce
-		nonce := make([]byte, gcm.NonceSize())
-		if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-			return
-		}
-
-		// Write the nonce to the pipe
-		if _, err = pw.Write(nonce); err != nil {
-			return
-		}
-
-		// Create a buffer for reading from the input
-		buf := make([]byte, 32*1024)
-
-		// Read and encrypt in chunks
-		for {
-			n, err := content.Read(buf)
-			if err != nil && err != io.EOF {
-				return
-			}
-
-			if n > 0 {
-				// Encrypt the data
-				ciphertext := gcm.Seal(nil, nonce, buf[:n], nil)
-
-				// Write the encrypted data to the pipe
-				if _, err := pw.Write(ciphertext); err != nil {
-					return
-				}
-			}
-
-			if err == io.EOF {
-				break
-			}
-		}
-	}()
-
-	// Write the encrypted data
-	return e.fs.Write(ctx, path, pr, options...)
-}
-
-// Read decrypts the content after reading
-func (e *EncryptedFS) Read(ctx context.Context, path string) (io.ReadCloser, error) {
-	// Read the encrypted content
-	encryptedContent, err := e.fs.Read(ctx, path)
-	if err != nil {
-		return nil, err
 	}
 
-	// Create a new AES cipher
+	// Create cipher.
 	block, err := aes.NewCipher(e.key)
 	if err != nil {
-		encryptedContent.Close()
-		return nil, err
+		return nil, &PathError{
+			Op:   "encrypt",
+			Path: path,
+			Err:  fmt.Errorf("%w: cipher creation failed: %w", ErrEncryptionFailed, err),
+			Code: ErrCodeInternal,
+		}
 	}
 
-	// Create a new GCM cipher
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		encryptedContent.Close()
-		return nil, err
+		return nil, &PathError{
+			Op:   "encrypt",
+			Path: path,
+			Err:  fmt.Errorf("%w: GCM creation failed: %w", ErrEncryptionFailed, err),
+			Code: ErrCodeInternal,
+		}
 	}
 
-	// Create a pipe for streaming decrypted data
+	// Generate base nonce.
+	baseNonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, baseNonce); err != nil {
+		return nil, &PathError{
+			Op:   "encrypt",
+			Path: path,
+			Err:  fmt.Errorf("%w: failed to generate nonce: %w", ErrEncryptionFailed, err),
+			Code: ErrCodeInternal,
+		}
+	}
+
+	// Create pipe for streaming encrypted data.
 	pr, pw := io.Pipe()
 
-	// Start decryption in a separate goroutine
+	// Channel to communicate errors from goroutine.
+	errChan := make(chan error, 1)
+
 	go func() {
-		var err error
+		var encryptErr error
 		defer func() {
-			encryptedContent.Close()
-			if err != nil {
-				pw.CloseWithError(err)
+			if encryptErr != nil {
+				pw.CloseWithError(encryptErr)
 			} else {
 				pw.Close()
 			}
+			errChan <- encryptErr
 		}()
 
-		// Read the nonce
-		nonce := make([]byte, gcm.NonceSize())
-		if _, err = io.ReadFull(encryptedContent, nonce); err != nil {
+		// Write header.
+		header := make([]byte, 17)
+		header[0] = encryptionFormatVersion
+		binary.BigEndian.PutUint32(header[1:5], uint32(e.chunkSize)) //nolint:gosec // chunkSize is validated to be <= 16MB in WithChunkSize
+		copy(header[5:17], baseNonce)
+
+		if _, err := pw.Write(header); err != nil {
+			encryptErr = err
 			return
 		}
 
-		// Create a buffer for decryption
-		buf := make([]byte, 32*1024+gcm.Overhead())
+		// Get buffer from pool.
+		plaintextBufPtr := plaintextPool.Get().(*[]byte)
+		plaintextBuf := *plaintextBufPtr
+		// Ensure buffer is large enough for our chunk size.
+		if len(plaintextBuf) < e.chunkSize {
+			plaintextBuf = make([]byte, e.chunkSize)
+			*plaintextBufPtr = plaintextBuf
+		}
+		defer plaintextPool.Put(plaintextBufPtr)
 
-		// Keep track of any leftover bytes from previous read
-		var leftover []byte
+		// Pre-allocate ciphertext buffer (plaintext + GCM overhead).
+		ciphertextBuf := make([]byte, 0, e.chunkSize+gcm.Overhead())
 
-		// Read and decrypt in chunks
+		// Chunk header buffer (4 bytes length + 4 bytes sequence).
+		chunkHeader := make([]byte, 8)
+
+		// Nonce buffer for per-chunk nonce derivation.
+		chunkNonce := make([]byte, gcm.NonceSize())
+
+		var chunkSeq uint32 = 0
+
 		for {
-			n, readErr := encryptedContent.Read(buf)
-			if readErr != nil && !errors.Is(readErr, io.EOF) {
+			// Check context.
+			select {
+			case <-ctx.Done():
+				encryptErr = ctx.Err()
+				return
+			default:
+			}
+
+			// Read plaintext chunk.
+			n, readErr := io.ReadFull(content, plaintextBuf[:e.chunkSize])
+			if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+				encryptErr = readErr
 				return
 			}
 
-			if n > 0 {
-				// Combine leftover with current read
-				leftover = append(leftover, buf[:n]...)
-
-				// We need at least one block to decrypt
-				if len(leftover) < gcm.Overhead() {
-					if errors.Is(readErr, io.EOF) {
-						// If we're at EOF and don't have enough data, something is wrong
-						return
-					}
-					continue
-				}
-
-				// Try to decrypt as much as we can
-				plaintext, decryptErr := gcm.Open(nil, nonce, leftover, nil)
-				if decryptErr != nil {
-					return
-				}
-
-				// Write the decrypted data to the pipe
-				if _, writeErr := pw.Write(plaintext); writeErr != nil {
-					return
-				}
-
-				leftover = nil
+			if n == 0 {
+				break
 			}
 
-			if errors.Is(readErr, io.EOF) {
+			// Derive per-chunk nonce: baseNonce XOR chunkSeq.
+			copy(chunkNonce, baseNonce)
+			binary.BigEndian.PutUint32(chunkNonce[len(chunkNonce)-4:], chunkSeq)
+
+			// Encrypt chunk (reuse ciphertext buffer).
+			ciphertextBuf = gcm.Seal(ciphertextBuf[:0], chunkNonce, plaintextBuf[:n], nil)
+
+			// Write chunk header.
+			binary.BigEndian.PutUint32(chunkHeader[0:4], uint32(len(ciphertextBuf))) //nolint:gosec // ciphertextBuf is bounded by chunkSize + GCM overhead
+			binary.BigEndian.PutUint32(chunkHeader[4:8], chunkSeq)
+
+			if _, err := pw.Write(chunkHeader); err != nil {
+				encryptErr = err
+				return
+			}
+
+			// Write encrypted chunk.
+			if _, err := pw.Write(ciphertextBuf); err != nil {
+				encryptErr = err
+				return
+			}
+
+			chunkSeq++
+
+			if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
 				break
 			}
 		}
 	}()
 
-	return pr, nil
+	// Write to underlying filesystem.
+	result, writeErr := e.fs.Write(ctx, path, pr, options...)
+
+	// Wait for encryption goroutine to finish and check for errors.
+	encryptErr := <-errChan
+
+	if writeErr != nil {
+		return nil, writeErr
+	}
+	if encryptErr != nil {
+		return nil, &PathError{
+			Op:   "encrypt",
+			Path: path,
+			Err:  encryptErr,
+			Code: ErrCodeInternal,
+		}
+	}
+
+	return result, nil
 }
 
-// ReadAll reads and decrypts all bytes from a file
+// Read decrypts and returns file content from the underlying filesystem.
+func (e *EncryptedFS) Read(ctx context.Context, path string) (io.ReadCloser, error) {
+	// Check context before starting.
+	if err := ctx.Err(); err != nil {
+		return nil, &PathError{
+			Op:   "decrypt",
+			Path: path,
+			Err:  err,
+			Code: ErrCodeCancelled,
+		}
+	}
+
+	// Read encrypted content.
+	encryptedReader, err := e.fs.Read(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create decrypting reader.
+	decReader, err := newDecryptingReader(ctx, encryptedReader, e.key, path)
+	if err != nil {
+		encryptedReader.Close()
+		return nil, err
+	}
+
+	return decReader, nil
+}
+
+// decryptingReader implements io.ReadCloser for streaming decryption.
+type decryptingReader struct {
+	ctx        context.Context
+	source     io.ReadCloser
+	gcm        cipher.AEAD
+	baseNonce  []byte
+	chunkSize  int
+	chunkSeq   uint32
+	decrypted  *bytes.Buffer // Buffer for decrypted data not yet read.
+	path       string
+	closed     bool
+	cipherBuf  []byte // Reusable buffer for reading ciphertext.
+	chunkNonce []byte // Reusable buffer for nonce derivation.
+}
+
+// newDecryptingReader creates a new decrypting reader.
+func newDecryptingReader(ctx context.Context, source io.ReadCloser, key []byte, path string) (*decryptingReader, error) {
+	// Create cipher.
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, &PathError{
+			Op:   "decrypt",
+			Path: path,
+			Err:  fmt.Errorf("%w: cipher creation failed: %w", ErrDecryptionFailed, err),
+			Code: ErrCodeInternal,
+		}
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, &PathError{
+			Op:   "decrypt",
+			Path: path,
+			Err:  fmt.Errorf("%w: GCM creation failed: %w", ErrDecryptionFailed, err),
+			Code: ErrCodeInternal,
+		}
+	}
+
+	// Read header (17 bytes).
+	header := make([]byte, 17)
+	if _, err := io.ReadFull(source, header); err != nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return nil, &PathError{
+				Op:   "decrypt",
+				Path: path,
+				Err:  ErrTruncatedFile,
+				Code: ErrCodeDataCorrupted,
+			}
+		}
+		return nil, &PathError{
+			Op:   "decrypt",
+			Path: path,
+			Err:  err,
+			Code: ErrCodeInternal,
+		}
+	}
+
+	// Parse header.
+	version := header[0]
+	if version != encryptionFormatVersion {
+		return nil, &PathError{
+			Op:   "decrypt",
+			Path: path,
+			Err:  fmt.Errorf("%w: got version %d, expected %d", ErrUnsupportedVersion, version, encryptionFormatVersion),
+			Code: ErrCodeDataCorrupted,
+		}
+	}
+
+	chunkSize := int(binary.BigEndian.Uint32(header[1:5]))
+	if chunkSize < 1024 || chunkSize > 16*1024*1024 {
+		return nil, &PathError{
+			Op:   "decrypt",
+			Path: path,
+			Err:  ErrInvalidChunkSize,
+			Code: ErrCodeDataCorrupted,
+		}
+	}
+
+	baseNonce := make([]byte, gcm.NonceSize())
+	copy(baseNonce, header[5:17])
+
+	return &decryptingReader{
+		ctx:        ctx,
+		source:     source,
+		gcm:        gcm,
+		baseNonce:  baseNonce,
+		chunkSize:  chunkSize,
+		chunkSeq:   0,
+		decrypted:  bytes.NewBuffer(nil),
+		path:       path,
+		cipherBuf:  make([]byte, chunkSize+gcm.Overhead()),
+		chunkNonce: make([]byte, gcm.NonceSize()),
+	}, nil
+}
+
+// Read implements io.Reader.
+func (d *decryptingReader) Read(p []byte) (int, error) {
+	if d.closed {
+		return 0, ErrClosed
+	}
+
+	// Check context.
+	select {
+	case <-d.ctx.Done():
+		return 0, d.ctx.Err()
+	default:
+	}
+
+	// Return buffered data first.
+	if d.decrypted.Len() > 0 {
+		return d.decrypted.Read(p)
+	}
+
+	// Read next chunk.
+	if err := d.decryptNextChunk(); err != nil {
+		if errors.Is(err, io.EOF) {
+			return 0, io.EOF
+		}
+		return 0, err
+	}
+
+	return d.decrypted.Read(p)
+}
+
+// decryptNextChunk reads and decrypts the next chunk from source.
+func (d *decryptingReader) decryptNextChunk() error {
+	// Read chunk header (8 bytes: 4 length + 4 sequence).
+	chunkHeader := make([]byte, 8)
+	_, err := io.ReadFull(d.source, chunkHeader)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return io.EOF
+		}
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return &PathError{
+				Op:   "decrypt",
+				Path: d.path,
+				Err:  ErrTruncatedFile,
+				Code: ErrCodeDataCorrupted,
+			}
+		}
+		return &PathError{
+			Op:   "decrypt",
+			Path: d.path,
+			Err:  err,
+			Code: ErrCodeInternal,
+		}
+	}
+
+	chunkLen := int(binary.BigEndian.Uint32(chunkHeader[0:4]))
+	chunkSeq := binary.BigEndian.Uint32(chunkHeader[4:8])
+
+	// Verify chunk sequence.
+	if chunkSeq != d.chunkSeq {
+		return &PathError{
+			Op:   "decrypt",
+			Path: d.path,
+			Err:  fmt.Errorf("%w: expected %d, got %d", ErrInvalidChunkSequence, d.chunkSeq, chunkSeq),
+			Code: ErrCodeDataCorrupted,
+		}
+	}
+
+	// Validate chunk length.
+	maxChunkLen := d.chunkSize + d.gcm.Overhead()
+	if chunkLen <= 0 || chunkLen > maxChunkLen {
+		return &PathError{
+			Op:   "decrypt",
+			Path: d.path,
+			Err:  fmt.Errorf("%w: chunk length %d exceeds maximum %d", ErrInvalidChunkSize, chunkLen, maxChunkLen),
+			Code: ErrCodeDataCorrupted,
+		}
+	}
+
+	// Read encrypted chunk.
+	ciphertext := d.cipherBuf[:chunkLen]
+	if _, err := io.ReadFull(d.source, ciphertext); err != nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return &PathError{
+				Op:   "decrypt",
+				Path: d.path,
+				Err:  ErrTruncatedFile,
+				Code: ErrCodeDataCorrupted,
+			}
+		}
+		return &PathError{
+			Op:   "decrypt",
+			Path: d.path,
+			Err:  err,
+			Code: ErrCodeInternal,
+		}
+	}
+
+	// Derive per-chunk nonce.
+	copy(d.chunkNonce, d.baseNonce)
+	binary.BigEndian.PutUint32(d.chunkNonce[len(d.chunkNonce)-4:], chunkSeq)
+
+	// Decrypt chunk.
+	plaintext, err := d.gcm.Open(nil, d.chunkNonce, ciphertext, nil)
+	if err != nil {
+		return &PathError{
+			Op:   "decrypt",
+			Path: d.path,
+			Err:  ErrDecryptionFailed,
+			Code: ErrCodeDataCorrupted,
+		}
+	}
+
+	// Store decrypted data.
+	d.decrypted.Reset()
+	d.decrypted.Write(plaintext)
+
+	d.chunkSeq++
+
+	return nil
+}
+
+// Close implements io.Closer.
+func (d *decryptingReader) Close() error {
+	if d.closed {
+		return nil
+	}
+	d.closed = true
+	return d.source.Close()
+}
+
+// ReadAll reads and decrypts all bytes from a file.
 func (e *EncryptedFS) ReadAll(ctx context.Context, path string) ([]byte, error) {
-	// Read the file
 	rc, err := e.Read(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
 
-	// Read all bytes
 	return io.ReadAll(rc)
 }
 
-// Delete delegates to the underlying filesystem
+// Delete delegates to the underlying filesystem.
 func (e *EncryptedFS) Delete(ctx context.Context, path string) error {
 	return e.fs.Delete(ctx, path)
 }
 
-// FileExists delegates to the underlying filesystem
+// FileExists delegates to the underlying filesystem.
 func (e *EncryptedFS) FileExists(ctx context.Context, path string) (bool, error) {
 	return e.fs.FileExists(ctx, path)
 }
 
-// DirExists delegates to the underlying filesystem
+// DirExists delegates to the underlying filesystem.
 func (e *EncryptedFS) DirExists(ctx context.Context, path string) (bool, error) {
 	return e.fs.DirExists(ctx, path)
 }
 
-// Stat delegates to the underlying filesystem
+// Stat delegates to the underlying filesystem.
+// Note: Size will reflect the encrypted size, not the plaintext size.
 func (e *EncryptedFS) Stat(ctx context.Context, path string) (*FileInfo, error) {
 	return e.fs.Stat(ctx, path)
 }
 
-// ListContents delegates to the underlying filesystem
+// ListContents delegates to the underlying filesystem.
 func (e *EncryptedFS) ListContents(ctx context.Context, path string, recursive bool) ([]FileInfo, error) {
 	return e.fs.ListContents(ctx, path, recursive)
 }
 
-// CreateDir delegates to the underlying filesystem
+// CreateDir delegates to the underlying filesystem.
 func (e *EncryptedFS) CreateDir(ctx context.Context, path string) error {
 	return e.fs.CreateDir(ctx, path)
 }
 
-// DeleteDir delegates to the underlying filesystem
+// DeleteDir delegates to the underlying filesystem.
 func (e *EncryptedFS) DeleteDir(ctx context.Context, path string) error {
 	return e.fs.DeleteDir(ctx, path)
 }
 
-// UploadFile encrypts and uploads a local file
+// UploadFile encrypts and uploads a local file.
 func (e *EncryptedFS) UploadFile(ctx context.Context, path, localPath string, options ...Option) error {
-	// Open the local file
 	file, err := os.Open(localPath)
 	if err != nil {
 		return &PathError{
@@ -251,11 +605,16 @@ func (e *EncryptedFS) UploadFile(ctx context.Context, path, localPath string, op
 	}
 	defer file.Close()
 
-	// Write the file
-	return e.Write(ctx, path, file, options...)
+	_, err = e.Write(ctx, path, file, options...)
+	return err
 }
 
-// Verify interface compliance at compile time
+// Underlying returns the wrapped filesystem.
+func (e *EncryptedFS) Underlying() FileSystem {
+	return e.fs
+}
+
+// Verify interface compliance at compile time.
 var (
 	_ FileSystem = (*EncryptedFS)(nil)
 	_ FileReader = (*EncryptedFS)(nil)

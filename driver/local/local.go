@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -42,10 +43,10 @@ func New(root string) (*Adapter, error) {
 }
 
 // Write implements filekit.FileWriter
-func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, options ...filekit.Option) error {
+func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, options ...filekit.Option) (*filekit.WriteResult, error) {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	default:
 		// Continue
 	}
@@ -54,42 +55,27 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.NewPathError("write", path, filekit.ErrNotAllowed)
 	}
 
 	// Ensure the directory exists
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: path,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", path, err)
 	}
 
 	// Create the file
 	f, err := os.Create(fullPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: path,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", path, err)
 	}
 	defer f.Close()
 
-	// Copy the content to the file
-	_, err = io.Copy(f, content)
+	// Copy the content to the file while calculating checksum
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(f, hash), content)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: path,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", path, err)
 	}
 
 	// Apply file options (permissions, etc.) if needed
@@ -98,23 +84,26 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	// Set file permissions based on visibility
 	if opts.Visibility == filekit.Public {
 		if err := os.Chmod(fullPath, 0644); err != nil {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: path,
-				Err:  err,
-			}
+			return nil, filekit.NewPathError("write", path, err)
 		}
 	} else if opts.Visibility == filekit.Private {
 		if err := os.Chmod(fullPath, 0600); err != nil {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: path,
-				Err:  err,
-			}
+			return nil, filekit.NewPathError("write", path, err)
 		}
 	}
 
-	return nil
+	// Get file info for timestamp
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, filekit.NewPathError("write", path, err)
+	}
+
+	return &filekit.WriteResult{
+		BytesWritten:      written,
+		Checksum:          hex.EncodeToString(hash.Sum(nil)),
+		ChecksumAlgorithm: filekit.ChecksumSHA256,
+		ServerTimestamp:   stat.ModTime(),
+	}, nil
 }
 
 // Read implements filekit.FileReader
@@ -556,15 +545,11 @@ func (a *Adapter) DeleteDir(ctx context.Context, path string) error {
 }
 
 // WriteFile writes a local file to the filesystem
-func (a *Adapter) WriteFile(ctx context.Context, path string, localPath string, options ...filekit.Option) error {
+func (a *Adapter) WriteFile(ctx context.Context, path string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	// Open the local file
 	file, err := os.Open(localPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "writefile",
-			Path: localPath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("writefile", localPath, err)
 	}
 	defer file.Close()
 
@@ -1186,6 +1171,77 @@ func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
 	return nil
 }
 
+// ReadRange implements filekit.CanReadRange for efficient partial file reads.
+func (a *Adapter) ReadRange(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	if length < 0 {
+		return nil, filekit.NewPathError("read_range", path, filekit.ErrInvalidOffset)
+	}
+
+	fullPath := filepath.Join(a.root, filepath.Clean(path))
+
+	if !isPathUnderRoot(a.root, fullPath) {
+		return nil, filekit.NewPathError("read_range", path, filekit.ErrNotAllowed)
+	}
+
+	file, err := os.Open(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, filekit.NewPathError("read_range", path, filekit.ErrNotExist)
+		}
+		return nil, filekit.NewPathError("read_range", path, err)
+	}
+
+	// Handle negative offset (from end)
+	if offset < 0 {
+		stat, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return nil, filekit.NewPathError("read_range", path, err)
+		}
+		offset = stat.Size() + offset
+		if offset < 0 {
+			offset = 0
+		}
+	}
+
+	// Seek to position
+	_, err = file.Seek(offset, io.SeekStart)
+	if err != nil {
+		file.Close()
+		return nil, filekit.NewPathError("read_range", path, err)
+	}
+
+	// If length specified, wrap in LimitReader
+	if length > 0 {
+		return &limitedReadCloser{
+			file:   file,
+			reader: io.LimitReader(file, length),
+		}, nil
+	}
+
+	return file, nil
+}
+
+// limitedReadCloser wraps a file with a limited reader.
+type limitedReadCloser struct {
+	file   *os.File
+	reader io.Reader
+}
+
+func (l *limitedReadCloser) Read(p []byte) (n int, err error) {
+	return l.reader.Read(p)
+}
+
+func (l *limitedReadCloser) Close() error {
+	return l.file.Close()
+}
+
 // Ensure Adapter implements interfaces
 var (
 	_ filekit.FileSystem      = (*Adapter)(nil)
@@ -1195,5 +1251,6 @@ var (
 	_ filekit.CanMove         = (*Adapter)(nil)
 	_ filekit.CanChecksum     = (*Adapter)(nil)
 	_ filekit.CanWatch        = (*Adapter)(nil)
+	_ filekit.CanReadRange    = (*Adapter)(nil)
 	_ filekit.ChunkedUploader = (*Adapter)(nil)
 )

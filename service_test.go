@@ -306,7 +306,7 @@ func TestDefaultOptionsFS(t *testing.T) {
 	// Test that default options are applied
 	ctx := context.Background()
 	content := strings.NewReader("test content")
-	err = defaultFS.Write(ctx, "test.txt", content)
+	_, err = defaultFS.Write(ctx, "test.txt", content)
 	if err != nil {
 		t.Errorf("Write with default options failed: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestIntegration(t *testing.T) {
 
 	// Test write
 	content := strings.NewReader("Hello, encrypted world!")
-	err = fs.Write(ctx, "encrypted.txt", content, WithContentType("text/plain"))
+	_, err = fs.Write(ctx, "encrypted.txt", content, WithContentType("text/plain"))
 	if err != nil {
 		t.Errorf("Write failed: %v", err)
 	}

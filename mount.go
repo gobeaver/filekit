@@ -188,10 +188,10 @@ func normalizeMountPath(p string) string {
 // ============================================================================
 
 // Write writes content to the path, routing to the appropriate mount.
-func (m *MountManager) Write(ctx context.Context, filePath string, content io.Reader, options ...Option) error {
+func (m *MountManager) Write(ctx context.Context, filePath string, content io.Reader, options ...Option) (*WriteResult, error) {
 	fs, relativePath, err := m.resolve(filePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	return fs.Write(ctx, relativePath, content, options...)
 }
@@ -353,7 +353,7 @@ func (m *MountManager) Copy(ctx context.Context, srcPath, dstPath string) error 
 		opts = append(opts, WithMetadata(srcInfo.Metadata))
 	}
 
-	if err := dstFS.Write(ctx, dstRelative, reader, opts...); err != nil {
+	if _, err := dstFS.Write(ctx, dstRelative, reader, opts...); err != nil {
 		return fmt.Errorf("write destination: %w", err)
 	}
 

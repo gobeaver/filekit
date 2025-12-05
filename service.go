@@ -90,7 +90,11 @@ func New(cfg *Config) (FileSystem, error) {
 		if len(key) != 32 {
 			return nil, fmt.Errorf("encryption key must be 32 bytes (got %d bytes)", len(key))
 		}
-		fs = NewEncryptedFS(fs, key)
+		encFS, err := NewEncryptedFS(fs, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create encrypted filesystem: %w", err)
+		}
+		fs = encFS
 	}
 
 	// Wrap with validator if needed
@@ -252,7 +256,7 @@ type defaultOptionsFS struct {
 	options []Option
 }
 
-func (d *defaultOptionsFS) Write(ctx context.Context, path string, content io.Reader, options ...Option) error {
+func (d *defaultOptionsFS) Write(ctx context.Context, path string, content io.Reader, options ...Option) (*WriteResult, error) {
 	// Merge default options with provided options (provided options take precedence)
 	allOptions := make([]Option, 0, len(d.options)+len(options))
 	allOptions = append(allOptions, d.options...)

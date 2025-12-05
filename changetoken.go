@@ -2,6 +2,7 @@ package filekit
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,6 +74,13 @@ func (t *CallbackChangeToken) SignalChange() {
 
 // pollingChangeToken is a ChangeToken for backends without native events.
 // It polls for changes at a specified interval.
+//
+// IMPORTANT: To prevent goroutine leaks, you MUST either:
+//  1. Cancel the context passed to NewPollingChangeToken, OR
+//  2. Call Stop() on the returned token when done
+//
+// A finalizer is set to clean up if the token is garbage collected without
+// being stopped, but you should not rely on this behavior.
 type pollingChangeToken struct {
 	mu        sync.RWMutex
 	changed   atomic.Bool
@@ -81,6 +89,7 @@ type pollingChangeToken struct {
 	checkFunc func() bool // Returns true if change detected
 	interval  time.Duration
 	lastCheck time.Time
+	stopped   atomic.Bool // Tracks if Stop() was called
 }
 
 // PollingConfig configures a polling change token.
@@ -93,6 +102,20 @@ type PollingConfig struct {
 
 // NewPollingChangeToken creates a ChangeToken that polls for changes.
 // The checkFunc is called periodically and should return true if a change occurred.
+//
+// IMPORTANT: To prevent goroutine leaks, you MUST either:
+//  1. Cancel the context passed to this function, OR
+//  2. Call Stop() on the returned token when done
+//
+// A finalizer is set to clean up if the token is garbage collected without
+// being stopped, but you should not rely on this behavior.
+//
+// Example:
+//
+//	ctx, cancel := context.WithCancel(context.Background())
+//	defer cancel() // Ensures goroutine cleanup
+//
+//	token := NewPollingChangeToken(ctx, config)
 func NewPollingChangeToken(ctx context.Context, config PollingConfig) *pollingChangeToken {
 	if config.Interval == 0 {
 		config.Interval = 5 * time.Second
@@ -106,6 +129,15 @@ func NewPollingChangeToken(ctx context.Context, config PollingConfig) *pollingCh
 		lastCheck: time.Now(),
 	}
 
+	// Set finalizer to clean up goroutine if token is garbage collected
+	// without being stopped. This is a safety net - users should still
+	// call Stop() or cancel context explicitly.
+	runtime.SetFinalizer(t, func(token *pollingChangeToken) {
+		if !token.stopped.Load() {
+			token.Stop()
+		}
+	})
+
 	// Start polling goroutine
 	go t.poll(ctx)
 
@@ -115,6 +147,7 @@ func NewPollingChangeToken(ctx context.Context, config PollingConfig) *pollingCh
 func (t *pollingChangeToken) poll(ctx context.Context) {
 	ticker := time.NewTicker(t.interval)
 	defer ticker.Stop()
+	defer t.stopped.Store(true) // Mark as stopped when goroutine exits
 
 	for {
 		select {
@@ -172,7 +205,11 @@ func (t *pollingChangeToken) RegisterChangeCallback(callback func()) (unregister
 }
 
 // Stop stops the polling goroutine.
+// It is safe to call Stop multiple times.
 func (t *pollingChangeToken) Stop() {
+	if t.stopped.Swap(true) {
+		return // Already stopped
+	}
 	if t.cancel != nil {
 		t.cancel()
 	}

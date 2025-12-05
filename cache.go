@@ -536,12 +536,12 @@ func (c *CachingFileSystem) ReadAll(ctx context.Context, path string) ([]byte, e
 }
 
 // Write delegates to the underlying filesystem and invalidates cache.
-func (c *CachingFileSystem) Write(ctx context.Context, path string, content io.Reader, options ...Option) error {
-	err := c.fs.Write(ctx, path, content, options...)
+func (c *CachingFileSystem) Write(ctx context.Context, path string, content io.Reader, options ...Option) (*WriteResult, error) {
+	result, err := c.fs.Write(ctx, path, content, options...)
 	if err == nil {
 		c.invalidatePath(path)
 	}
-	return err
+	return result, err
 }
 
 // Delete delegates to the underlying filesystem and invalidates cache.
@@ -700,21 +700,20 @@ func WarmCache(ctx context.Context, fs *CachingFileSystem, prefix string) error 
 		return err
 	}
 
-	for _, file := range files {
+	for i := range files {
 		// Cache exists results
-		if file.IsDir {
-			fs.cache.Set(fs.cacheKey("direxists", file.Path), true, fs.opts.TTL)
+		if files[i].IsDir {
+			fs.cache.Set(fs.cacheKey("direxists", files[i].Path), true, fs.opts.TTL)
 		} else {
-			fs.cache.Set(fs.cacheKey("fileexists", file.Path), true, fs.opts.TTL)
+			fs.cache.Set(fs.cacheKey("fileexists", files[i].Path), true, fs.opts.TTL)
 		}
 
 		// Cache stat result
-		fileCopy := file // Create copy to avoid pointer issues
-		fs.cache.Set(fs.cacheKey("stat", file.Path), &fileCopy, fs.opts.TTL)
+		fs.cache.Set(fs.cacheKey("stat", files[i].Path), &files[i], fs.opts.TTL)
 
 		// Recursively warm subdirectories
-		if file.IsDir {
-			if err := WarmCache(ctx, fs, file.Path); err != nil {
+		if files[i].IsDir {
+			if err := WarmCache(ctx, fs, files[i].Path); err != nil {
 				return err
 			}
 		}

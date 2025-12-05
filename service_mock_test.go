@@ -24,7 +24,7 @@ func TestServiceWithMock(t *testing.T) {
 	ctx := context.Background()
 	content := "test content"
 
-	err = fs.Write(ctx, "test.txt", strings.NewReader(content))
+	_, err = fs.Write(ctx, "test.txt", strings.NewReader(content))
 	if err != nil {
 		t.Errorf("Write failed: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestDefaultOptionsWithMock(t *testing.T) {
 
 	// The mock doesn't actually use options, but we're testing that the wrapper is applied
 	ctx := context.Background()
-	err = fs.Write(ctx, "test.txt", strings.NewReader("test"))
+	_, err = fs.Write(ctx, "test.txt", strings.NewReader("test"))
 	if err != nil {
 		t.Errorf("Write with default options failed: %v", err)
 	}

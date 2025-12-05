@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"mime"
@@ -286,10 +288,10 @@ func (a *Adapter) rewriteZip() error {
 }
 
 // Write implements filekit.FileWriter
-func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) error {
+func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) (*filekit.WriteResult, error) {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
@@ -297,21 +299,13 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	defer a.mu.Unlock()
 
 	if a.mode == ModeRead {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.NewPathError("write", filePath, filekit.ErrNotAllowed)
 	}
 
 	filePath = normalizePath(filePath)
 
 	if !isValidPath(filePath) {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.NewPathError("write", filePath, filekit.ErrNotAllowed)
 	}
 
 	opts := processOptions(options...)
@@ -319,55 +313,40 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	// Check if file exists
 	if !opts.Overwrite {
 		if _, exists := a.files[filePath]; exists {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: filePath,
-				Err:  filekit.ErrExist,
-			}
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
 		}
 		if _, exists := a.pending[filePath]; exists {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: filePath,
-				Err:  filekit.ErrExist,
-			}
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
 		}
 	}
 
 	// Read content
 	data, err := io.ReadAll(content)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", filePath, err)
 	}
+
+	// Calculate checksum
+	hash := sha256.Sum256(data)
+	checksum := hex.EncodeToString(hash[:])
+	now := time.Now()
 
 	// For write mode, write directly to the ZIP
 	if a.mode == ModeWrite && a.writer != nil {
 		header := &zip.FileHeader{
 			Name:     filePath,
 			Method:   zip.Deflate,
-			Modified: time.Now(),
+			Modified: now,
 		}
 		header.SetMode(0644)
 
 		w, err := a.writer.CreateHeader(header)
 		if err != nil {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: filePath,
-				Err:  err,
-			}
+			return nil, filekit.NewPathError("write", filePath, err)
 		}
 
 		if _, err := w.Write(data); err != nil {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: filePath,
-				Err:  err,
-			}
+			return nil, filekit.NewPathError("write", filePath, err)
 		}
 
 		// Add to index
@@ -387,7 +366,12 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 		a.ensureParentDirsPending(filePath)
 	}
 
-	return nil
+	return &filekit.WriteResult{
+		BytesWritten:      int64(len(data)),
+		Checksum:          checksum,
+		ChecksumAlgorithm: filekit.ChecksumSHA256,
+		ServerTimestamp:   now,
+	}, nil
 }
 
 // Read implements filekit.FileReader
@@ -891,14 +875,10 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 }
 
 // UploadFile implements filekit.Uploader
-func (a *Adapter) UploadFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) error {
+func (a *Adapter) UploadFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "uploadfile",
-			Path: localPath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("uploadfile", localPath, err)
 	}
 	defer file.Close()
 

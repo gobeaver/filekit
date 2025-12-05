@@ -64,8 +64,9 @@ func main() {
 
     ctx := context.Background()
 
-    // Write a file
-    fs.Write(ctx, "hello.txt", strings.NewReader("Hello, World!"))
+    // Write a file (returns WriteResult with metadata)
+    result, _ := fs.Write(ctx, "hello.txt", strings.NewReader("Hello, World!"))
+    fmt.Printf("Wrote %d bytes, checksum: %s\n", result.BytesWritten, result.Checksum)
 
     // Read the file
     reader, _ := fs.Read(ctx, "hello.txt")
@@ -154,7 +155,8 @@ type FileReader interface {
 ```go
 type FileWriter interface {
     // Write writes content from reader to path.
-    Write(ctx context.Context, path string, r io.Reader, opts ...Option) error
+    // Returns metadata about the completed write operation.
+    Write(ctx context.Context, path string, r io.Reader, opts ...Option) (*WriteResult, error)
 
     // Delete removes a file.
     Delete(ctx context.Context, path string) error
@@ -164,6 +166,20 @@ type FileWriter interface {
 
     // DeleteDir removes a directory and all contents.
     DeleteDir(ctx context.Context, path string) error
+}
+```
+
+### WriteResult Struct
+
+```go
+type WriteResult struct {
+    BytesWritten      int64             // Total bytes written
+    Checksum          string            // Computed checksum (hex-encoded)
+    ChecksumAlgorithm ChecksumAlgorithm // Algorithm used (sha256, md5, etc.)
+    Version           string            // Version ID (for versioned backends)
+    ETag              string            // Entity tag (S3, GCS, Azure)
+    ServerTimestamp   time.Time         // When server completed write
+    Metadata          map[string]string // Additional backend-specific metadata
 }
 ```
 
@@ -218,6 +234,7 @@ FileKit uses optional interfaces to expose native capabilities of each storage b
 | `CanSignURL` | Generate pre-signed URLs for direct access | `SignedURL(ctx, path, expires)`, `SignedUploadURL(ctx, path, expires)` |
 | `CanChecksum` | Calculate file checksums/hashes | `Checksum(ctx, path, algorithm)`, `Checksums(ctx, path, algorithms)` |
 | `CanWatch` | File change detection (ChangeToken pattern) | `Watch(ctx, pattern) (ChangeToken, error)` |
+| `CanReadRange` | Partial file reads (byte ranges) | `ReadRange(ctx, path, offset, length) (io.ReadCloser, error)` |
 
 ### Interface Details
 
@@ -259,6 +276,16 @@ type CanWatch interface {
     // Watch creates a change token for the specified filter pattern
     // Supports glob patterns: "**/*.txt", "config/*", "*.json"
     Watch(ctx context.Context, pattern string) (ChangeToken, error)
+}
+
+// CanReadRange - Partial file reads for streaming and resume
+type CanReadRange interface {
+    // ReadRange reads a byte range from a file
+    // offset >= 0: absolute position from start
+    // offset < 0: position from end (e.g., -1024 = last 1KB)
+    // length > 0: read exactly this many bytes
+    // length == 0: read to end of file
+    ReadRange(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error)
 }
 ```
 
@@ -331,7 +358,7 @@ if copier, ok := fs.(filekit.CanCopy); ok {
 } else {
     // Fall back to read + write
     reader, _ := fs.Read(ctx, "source.txt")
-    fs.Write(ctx, "destination.txt", reader)
+    _, _ = fs.Write(ctx, "destination.txt", reader)
 }
 
 // Generate pre-signed URL for direct download
@@ -373,6 +400,19 @@ cancel := filekit.OnChange(
     },
 )
 defer cancel()
+
+// Range reads for streaming and partial file access
+if rangeReader, ok := fs.(filekit.CanReadRange); ok {
+    // Read last 1KB of a log file
+    reader, err := rangeReader.ReadRange(ctx, "app.log", -1024, 1024)
+    if err == nil {
+        defer reader.Close()
+        // Process tail of log file
+    }
+
+    // Read bytes 1000-2000 for video streaming
+    reader, err = rangeReader.ReadRange(ctx, "video.mp4", 1000, 1000)
+}
 ```
 
 ---
@@ -459,15 +499,15 @@ selector := filekit.FuncSelectorFull(
 
 ## Driver Implementation Matrix
 
-| Driver | FileSystem | CanCopy | CanMove | CanSignURL | CanChecksum | CanWatch | ChunkedUploader |
-|--------|------------|---------|---------|------------|-------------|----------|-----------------|
-| `local` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Native | ✅ |
-| `s3` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ✅ |
-| `gcs` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ✅ |
-| `azure` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ✅ |
-| `sftp` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Polling | ✅ |
-| `memory` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Native | ❌ |
-| `zip` | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ Never | ❌ |
+| Driver | FileSystem | CanCopy | CanMove | CanSignURL | CanChecksum | CanWatch | CanReadRange | ChunkedUploader |
+|--------|------------|---------|---------|------------|-------------|----------|--------------|-----------------|
+| `local` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Native | ✅ | ✅ |
+| `s3` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ❌ | ✅ |
+| `gcs` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ❌ | ✅ |
+| `azure` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Polling | ❌ | ✅ |
+| `sftp` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Polling | ❌ | ✅ |
+| `memory` | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ Native | ❌ | ❌ |
+| `zip` | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ Never | ❌ | ❌ |
 
 **Watcher Types:**
 - **Native**: Uses fsnotify for real-time file system events (local) or internal hooks (memory)
@@ -732,7 +772,7 @@ exists, _ := readOnly.FileExists(ctx, "file.txt")
 files, _ := readOnly.ListContents(ctx, "/", false)
 
 // Write operations return ErrReadOnly
-err := readOnly.Write(ctx, "file.txt", reader)
+_, err := readOnly.Write(ctx, "file.txt", reader)
 // Error: "write file.txt: filesystem is read-only"
 
 // Check if error is due to read-only mode
@@ -749,7 +789,7 @@ readOnly := filekit.NewReadOnlyFileSystem(fs,
     filekit.WithAllowCreateDir(true),
 )
 readOnly.CreateDir(ctx, "logs")  // Allowed
-readOnly.Write(ctx, "file.txt", reader)  // Blocked
+_, _ = readOnly.Write(ctx, "file.txt", reader)  // Blocked
 
 // Allow deletion (use with caution)
 readOnly := filekit.NewReadOnlyFileSystem(fs,
@@ -924,11 +964,11 @@ validator := filevalidator.New(filevalidator.Constraints{
 validatedFS := filekit.NewValidatedFileSystem(fs, validator)
 
 // Write fails if file doesn't meet constraints
-err := validatedFS.Write(ctx, "malware.exe", reader)
+_, err := validatedFS.Write(ctx, "malware.exe", reader)
 // Error: file type not allowed
 
 // Or use per-write validation
-fs.Write(ctx, "photo.jpg", reader,
+_, _ = fs.Write(ctx, "photo.jpg", reader,
     filekit.WithValidator(validator),
 )
 ```
@@ -1079,13 +1119,14 @@ validator := filevalidator.ForImages().MaxSize(5 * 1024 * 1024)
 validatedFS := filekit.NewValidatedFileSystem(fs, validator)
 
 // All writes are automatically validated
-err := validatedFS.Write(ctx, "photo.jpg", reader)
+result, err := validatedFS.Write(ctx, "photo.jpg", reader)
 if err != nil {
     // Validation failed - file rejected before write
 }
+fmt.Printf("Wrote %d bytes\n", result.BytesWritten)
 
 // Or validate per-write
-fs.Write(ctx, "document.pdf", reader,
+_, _ = fs.Write(ctx, "document.pdf", reader,
     filekit.WithValidator(filevalidator.ForDocuments()),
 )
 ```

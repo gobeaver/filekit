@@ -59,7 +59,7 @@ func New(client *storage.Client, bucket string, options ...AdapterOption) *Adapt
 }
 
 // Write implements filekit.FileWriter
-func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) error {
+func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) (*filekit.WriteResult, error) {
 	opts := processOptions(options...)
 
 	// Combine prefix and path
@@ -73,14 +73,10 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	if !opts.Overwrite {
 		_, err := obj.Attrs(ctx)
 		if err == nil {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: filePath,
-				Err:  filekit.ErrExist,
-			}
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
 		}
 		if !errors.Is(err, storage.ErrObjectNotExist) {
-			return mapGCSError("write", filePath, err)
+			return nil, mapGCSError("write", filePath, err)
 		}
 	}
 
@@ -112,18 +108,39 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 		}
 	}
 
-	// Copy content to writer
-	if _, err := io.Copy(writer, content); err != nil {
+	// Copy content to writer while counting bytes
+	written, err := io.Copy(writer, content)
+	if err != nil {
 		writer.Close()
-		return mapGCSError("write", filePath, err)
+		return nil, mapGCSError("write", filePath, err)
 	}
 
 	// Close the writer to complete the write
 	if err := writer.Close(); err != nil {
-		return mapGCSError("write", filePath, err)
+		return nil, mapGCSError("write", filePath, err)
 	}
 
-	return nil
+	// Get the object attrs for metadata
+	attrs, err := obj.Attrs(ctx)
+	var etag, checksum string
+	var serverTime time.Time
+	if err == nil {
+		etag = attrs.Etag
+		if len(attrs.MD5) > 0 {
+			checksum = hex.EncodeToString(attrs.MD5)
+		}
+		serverTime = attrs.Updated
+	} else {
+		serverTime = time.Now()
+	}
+
+	return &filekit.WriteResult{
+		BytesWritten:      written,
+		ETag:              etag,
+		Checksum:          checksum,
+		ChecksumAlgorithm: filekit.ChecksumMD5,
+		ServerTimestamp:   serverTime,
+	}, nil
 }
 
 // Read implements filekit.FileReader
@@ -401,14 +418,10 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 }
 
 // WriteFile writes a local file to the filesystem
-func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) error {
+func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "writefile",
-			Path: localPath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("writefile", localPath, err)
 	}
 	defer file.Close()
 

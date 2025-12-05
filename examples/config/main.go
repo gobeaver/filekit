@@ -70,7 +70,7 @@ func main() {
 
 	// Write a file
 	content := strings.NewReader("Hello, World!")
-	if err := customFS.Write(ctx, "hello.txt", content); err != nil {
+	if _, err := customFS.Write(ctx, "hello.txt", content); err != nil {
 		log.Printf("Upload failed: %v", err)
 	}
 

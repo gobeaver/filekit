@@ -56,18 +56,25 @@ func New(client *s3.Client, bucket string, options ...AdapterOption) *Adapter {
 }
 
 // Write implements filekit.FileWriter
-func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) error {
+func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) (*filekit.WriteResult, error) {
 	// Process options
 	opts := processOptions(options...)
 
 	// Combine prefix and path
 	key := path.Join(a.prefix, filePath)
 
+	// Read content into buffer to calculate size and checksum
+	data, err := io.ReadAll(content)
+	if err != nil {
+		return nil, filekit.NewPathError("write", filePath, err)
+	}
+
 	// Prepare upload input
 	input := &s3.PutObjectInput{
-		Bucket: aws.String(a.bucket),
-		Key:    aws.String(key),
-		Body:   content,
+		Bucket:            aws.String(a.bucket),
+		Key:               aws.String(key),
+		Body:              bytes.NewReader(data),
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
 	}
 
 	// Set content type if provided
@@ -97,12 +104,19 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	}
 
 	// Upload the object
-	_, err := a.client.PutObject(ctx, input)
+	result, err := a.client.PutObject(ctx, input)
 	if err != nil {
-		return mapS3Error("write", filePath, err)
+		return nil, mapS3Error("write", filePath, err)
 	}
 
-	return nil
+	return &filekit.WriteResult{
+		BytesWritten:      int64(len(data)),
+		ETag:              aws.ToString(result.ETag),
+		Version:           aws.ToString(result.VersionId),
+		Checksum:          aws.ToString(result.ChecksumSHA256),
+		ChecksumAlgorithm: filekit.ChecksumSHA256,
+		ServerTimestamp:   time.Now(),
+	}, nil
 }
 
 // Read implements filekit.FileReader
@@ -406,7 +420,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 }
 
 // WriteFile writes a local file to S3
-func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) error {
+func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	// Determine content type from file extension
 	contentType := ""
 	ext := filepath.Ext(localPath)
@@ -432,11 +446,7 @@ func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath stri
 	// Open the file
 	file, err := os.Open(localPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "writefile",
-			Path: localPath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("writefile", localPath, err)
 	}
 	defer file.Close()
 

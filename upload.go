@@ -78,7 +78,8 @@ func Upload(ctx context.Context, fs FileSystem, path string, r io.Reader, size i
 	}
 
 	// Use regular write
-	return fs.Write(ctx, path, r, options...)
+	_, err := fs.Write(ctx, path, r, options...)
+	return err
 }
 
 // uploadChunked uploads a file using chunked upload

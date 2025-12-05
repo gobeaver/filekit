@@ -3,6 +3,8 @@ package memory
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"mime"
 	"net/http"
@@ -77,10 +79,10 @@ func New(cfg ...Config) *Adapter {
 }
 
 // Write implements filekit.FileWriter
-func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, options ...filekit.Option) error {
+func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, options ...filekit.Option) (*filekit.WriteResult, error) {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
@@ -88,21 +90,13 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 
 	// Validate path
 	if !isValidPath(path) {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.NewPathError("write", path, filekit.ErrNotAllowed)
 	}
 
 	// Read content into memory
 	data, err := io.ReadAll(content)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: path,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", path, err)
 	}
 
 	opts := processOptions(options...)
@@ -113,11 +107,7 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	// Check if file exists and overwrite is not allowed
 	if existing, exists := a.files[path]; exists {
 		if !opts.Overwrite {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: path,
-				Err:  filekit.ErrExist,
-			}
+			return nil, filekit.NewPathError("write", path, filekit.ErrExist)
 		}
 		// Subtract old file size
 		a.size -= int64(len(existing.content))
@@ -126,11 +116,7 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	// Check max size limit
 	newSize := a.size + int64(len(data))
 	if a.maxSize > 0 && newSize > a.maxSize {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: path,
-			Err:  filekit.ErrInvalidSize,
-		}
+		return nil, filekit.NewPathError("write", path, filekit.ErrInvalidSize)
 	}
 
 	// Ensure parent directories exist
@@ -142,12 +128,18 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 		contentType = detectContentType(path, data)
 	}
 
+	// Calculate checksum
+	hash := sha256.Sum256(data)
+	checksum := hex.EncodeToString(hash[:])
+
+	now := time.Now()
+
 	// Store the file
 	a.files[path] = &memoryFile{
 		content:     data,
 		contentType: contentType,
 		metadata:    opts.Metadata,
-		modTime:     time.Now(),
+		modTime:     now,
 		visibility:  opts.Visibility,
 	}
 	a.size = newSize
@@ -155,7 +147,12 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	// Notify watchers of the change
 	go a.notifyWatchers(path)
 
-	return nil
+	return &filekit.WriteResult{
+		BytesWritten:      int64(len(data)),
+		Checksum:          checksum,
+		ChecksumAlgorithm: filekit.ChecksumSHA256,
+		ServerTimestamp:   now,
+	}, nil
 }
 
 // Read implements filekit.FileReader
@@ -177,6 +174,7 @@ func (a *Adapter) Read(ctx context.Context, path string) (io.ReadCloser, error) 
 			Op:   "read",
 			Path: path,
 			Err:  filekit.ErrNotExist,
+			Code: filekit.ErrCodeNotFound,
 		}
 	}
 
@@ -588,12 +586,8 @@ func (a *Adapter) DeleteDir(ctx context.Context, path string) error {
 }
 
 // WriteFile implements filekit.FileWriter
-func (a *Adapter) WriteFile(ctx context.Context, path string, localPath string, options ...filekit.Option) error {
-	return &filekit.PathError{
-		Op:   "writefile",
-		Path: localPath,
-		Err:  filekit.ErrNotSupported,
-	}
+func (a *Adapter) WriteFile(ctx context.Context, path string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
+	return nil, filekit.NewPathError("writefile", localPath, filekit.ErrNotSupported)
 }
 
 // Clear removes all files and directories from the memory filesystem

@@ -12,10 +12,22 @@ import (
 // Currently only supports ZIP format (including .jar, .war, .ear which are ZIP-based).
 // For other formats (RAR, 7z, TAR), use dedicated libraries.
 type ArchiveValidator struct {
+	// MaxCompressionRatio is the maximum allowed compression ratio (uncompressed/compressed).
+	// A ratio of 100 means files can expand up to 100x when decompressed.
+	// Zip bombs often have ratios of 1000:1 or higher.
 	MaxCompressionRatio float64
-	MaxFiles            int
+
+	// MaxFiles is the maximum number of files allowed in the archive.
+	// Prevents file count bombs that create millions of small files.
+	MaxFiles int
+
+	// MaxUncompressedSize is the maximum total uncompressed size in bytes.
+	// Prevents decompression bombs that expand to terabytes.
 	MaxUncompressedSize int64
-	MaxNestedArchives   int
+
+	// MaxNestedArchives is the maximum depth of nested archives (zip within zip).
+	// Prevents recursive archive attacks.
+	MaxNestedArchives int
 }
 
 // DefaultArchiveValidator creates an archive validator with sensible defaults

@@ -6,15 +6,124 @@ import (
 	"time"
 )
 
-// FileInfo represents file/directory metadata
+// FileInfo represents file or directory metadata returned by [FileReader.Stat]
+// and [FileReader.ListContents].
 type FileInfo struct {
-	Name        string
-	Path        string
-	Size        int64
-	ModTime     time.Time
-	IsDir       bool
+	// Name is the base name of the file or directory (e.g., "photo.jpg").
+	Name string
+
+	// Path is the full path relative to the filesystem root (e.g., "images/photo.jpg").
+	Path string
+
+	// Size is the file size in bytes. For directories, this is typically 0.
+	Size int64
+
+	// ModTime is the last modification time of the file or directory.
+	ModTime time.Time
+
+	// IsDir is true if this entry represents a directory.
+	IsDir bool
+
+	// ContentType is the MIME type of the file (e.g., "image/jpeg").
+	// May be empty if not detected or not applicable (directories).
 	ContentType string
-	Metadata    map[string]string
+
+	// Metadata contains custom key-value metadata associated with the file.
+	// Cloud storage backends support arbitrary metadata; local filesystem may not.
+	Metadata map[string]string
+
+	// ETag is the entity tag for caching and conditional requests.
+	// Used by cloud storage backends (S3, GCS, Azure).
+	ETag string
+
+	// Version is the version ID for versioned storage backends.
+	// Empty for backends without versioning.
+	Version string
+
+	// StorageClass is the storage tier (e.g., "STANDARD", "GLACIER").
+	// Backend-specific; may be empty.
+	StorageClass string
+
+	// Checksum is the pre-computed checksum if available from the backend.
+	Checksum string
+
+	// ChecksumAlgorithm indicates which algorithm was used for Checksum.
+	ChecksumAlgorithm ChecksumAlgorithm
+
+	// CreatedAt is the creation time (may not be available on all backends).
+	CreatedAt *time.Time
+
+	// AccessedAt is the last access time (may not be available on all backends).
+	AccessedAt *time.Time
+
+	// Owner contains file ownership information (optional, backend-specific).
+	Owner *FileOwner
+
+	// Permissions contains file permissions/ACL (optional, backend-specific).
+	Permissions *FilePermissions
+}
+
+// FileOwner represents file ownership information.
+type FileOwner struct {
+	// ID is the user/account ID.
+	ID string
+
+	// DisplayName is a human-readable name.
+	DisplayName string
+
+	// Email is the email address (if available).
+	Email string
+}
+
+// FilePermissions represents file permissions/ACL.
+type FilePermissions struct {
+	// Mode is Unix-style permissions (e.g., "0644").
+	Mode string
+
+	// ACL is the access control list.
+	ACL []ACLEntry
+
+	// IsPublic is a quick check for public access.
+	IsPublic bool
+}
+
+// ACLEntry represents a single ACL entry.
+type ACLEntry struct {
+	// Grantee is the user/group ID.
+	Grantee string
+
+	// Permission is the permission type (READ, WRITE, FULL_CONTROL, etc.).
+	Permission string
+
+	// GranteeType is USER, GROUP, ALL_USERS, etc.
+	GranteeType string
+}
+
+// WriteResult contains metadata about a completed write operation.
+type WriteResult struct {
+	// BytesWritten is the total number of bytes written.
+	BytesWritten int64
+
+	// Checksum is the computed checksum (if available).
+	// Format depends on ChecksumAlgorithm used.
+	Checksum string
+
+	// ChecksumAlgorithm indicates which algorithm was used for Checksum.
+	ChecksumAlgorithm ChecksumAlgorithm
+
+	// Version is the version identifier (for versioned storage backends).
+	// Empty for backends without versioning.
+	Version string
+
+	// ETag is the entity tag (S3, GCS, Azure).
+	// Can be used for conditional requests and caching.
+	ETag string
+
+	// ServerTimestamp is when the server completed the write.
+	ServerTimestamp time.Time
+
+	// Metadata contains any additional backend-specific metadata.
+	Metadata map[string]string
 }
 
 // ============================================================================
@@ -47,8 +156,9 @@ type FileReader interface {
 // FileWriter provides write filesystem operations.
 type FileWriter interface {
 	// Write writes content from reader to path.
+	// Returns metadata about the write operation.
 	// Use bytes.NewReader(data) for []byte, os.Open() for local files.
-	Write(ctx context.Context, path string, r io.Reader, opts ...Option) error
+	Write(ctx context.Context, path string, r io.Reader, opts ...Option) (*WriteResult, error)
 
 	// Delete removes a file.
 	Delete(ctx context.Context, path string) error
@@ -213,4 +323,38 @@ type CanWatch interface {
 	// Supports glob patterns: "**/*.txt", "config/*", "*.json", etc.
 	// The token signals when any matching file is created, modified, or deleted.
 	Watch(ctx context.Context, pattern string) (ChangeToken, error)
+}
+
+// ============================================================================
+// Range Read Interface
+// ============================================================================
+
+// CanReadRange indicates the filesystem supports range reads.
+// This is essential for:
+// - Video streaming (byte-range requests)
+// - Resume downloads
+// - Reading file tails (logs)
+// - Efficient partial file access
+//
+// Example:
+//
+//	if rangeReader, ok := fs.(CanReadRange); ok {
+//	    // Read last 1KB of log file
+//	    reader, err := rangeReader.ReadRange(ctx, "app.log", -1024, 1024)
+//	}
+type CanReadRange interface {
+	// ReadRange reads a specific byte range from a file.
+	//
+	// offset: Starting position
+	//   - If >= 0: absolute position from start
+	//   - If < 0: position from end (e.g., -100 = last 100 bytes)
+	//
+	// length: Number of bytes to read
+	//   - If > 0: read exactly this many bytes
+	//   - If 0: read to end of file
+	//   - If < 0: invalid (returns error)
+	//
+	// Returns io.ReadCloser positioned at offset.
+	// Caller must close the reader.
+	ReadRange(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error)
 }

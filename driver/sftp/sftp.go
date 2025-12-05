@@ -3,6 +3,7 @@ package sftp
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -199,27 +200,19 @@ func (a *Adapter) isPathSafe(relativePath string) bool {
 }
 
 // Write implements filekit.FileWriter
-func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) error {
+func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader, options ...filekit.Option) (*filekit.WriteResult, error) {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
 	if !a.isPathSafe(filePath) {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.NewPathError("write", filePath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", filePath, err)
 	}
 
 	opts := processOptions(options...)
@@ -229,49 +222,31 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	if !opts.Overwrite {
 		_, err := a.client.Stat(fullPath)
 		if err == nil {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: filePath,
-				Err:  filekit.ErrExist,
-			}
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
 		}
 		if !os.IsNotExist(err) {
-			return &filekit.PathError{
-				Op:   "write",
-				Path: filePath,
-				Err:  err,
-			}
+			return nil, filekit.NewPathError("write", filePath, err)
 		}
 	}
 
 	// Ensure parent directory exists
 	dir := path.Dir(fullPath)
 	if err := a.client.MkdirAll(dir); err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", filePath, err)
 	}
 
 	// Create file
 	file, err := a.client.Create(fullPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("write", filePath, err)
 	}
 	defer file.Close()
 
-	// Copy content
-	if _, err := io.Copy(file, content); err != nil {
-		return &filekit.PathError{
-			Op:   "write",
-			Path: filePath,
-			Err:  err,
-		}
+	// Copy content while calculating checksum
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(file, hash), content)
+	if err != nil {
+		return nil, filekit.NewPathError("write", filePath, err)
 	}
 
 	// Set permissions based on visibility
@@ -284,7 +259,21 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 		_ = err
 	}
 
-	return nil
+	// Get file info for timestamp
+	stat, err := a.client.Stat(fullPath)
+	var modTime time.Time
+	if err == nil {
+		modTime = stat.ModTime()
+	} else {
+		modTime = time.Now()
+	}
+
+	return &filekit.WriteResult{
+		BytesWritten:      written,
+		Checksum:          hex.EncodeToString(hash.Sum(nil)),
+		ChecksumAlgorithm: filekit.ChecksumSHA256,
+		ServerTimestamp:   modTime,
+	}, nil
 }
 
 // Read implements filekit.FileReader
@@ -705,14 +694,10 @@ func (a *Adapter) removeAll(dirPath string) error {
 }
 
 // WriteFile implements filekit.FileWriter
-func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) error {
+func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "writefile",
-			Path: localPath,
-			Err:  err,
-		}
+		return nil, filekit.NewPathError("writefile", localPath, err)
 	}
 	defer file.Close()
 

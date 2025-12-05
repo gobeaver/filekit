@@ -15,12 +15,28 @@ import (
 // This is TYPE validation, not security scanning.
 // For malware detection, integrate with ClamAV or similar.
 type ImageValidator struct {
-	MaxWidth   int
-	MaxHeight  int
-	MaxPixels  int
-	MinWidth   int
-	MinHeight  int
-	AllowSVG   bool
+	// MaxWidth is the maximum allowed image width in pixels.
+	MaxWidth int
+
+	// MaxHeight is the maximum allowed image height in pixels.
+	MaxHeight int
+
+	// MaxPixels is the maximum total pixel count (width * height).
+	// Prevents decompression bombs from images with extreme dimensions.
+	MaxPixels int
+
+	// MinWidth is the minimum required image width in pixels.
+	MinWidth int
+
+	// MinHeight is the minimum required image height in pixels.
+	MinHeight int
+
+	// AllowSVG enables SVG file validation.
+	// SVG files are XML-based and validated differently from raster images.
+	AllowSVG bool
+
+	// MaxSVGSize is the maximum allowed SVG file size in bytes.
+	// SVG files can contain complex paths that expand significantly when rendered.
 	MaxSVGSize int64
 }
 
