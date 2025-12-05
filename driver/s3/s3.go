@@ -63,18 +63,62 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	// Combine prefix and path
 	key := path.Join(a.prefix, filePath)
 
-	// Read content into buffer to calculate size and checksum
-	data, err := io.ReadAll(content)
-	if err != nil {
-		return nil, filekit.NewPathError("write", filePath, err)
+	// Try to get content length and create a seekable body for streaming
+	var body io.Reader
+	var contentLength int64 = -1
+
+	// Check if reader supports seeking (enables streaming without buffering)
+	switch r := content.(type) {
+	case *bytes.Reader:
+		contentLength = int64(r.Len())
+		body = r
+	case *bytes.Buffer:
+		contentLength = int64(r.Len())
+		body = r
+	case *strings.Reader:
+		contentLength = int64(r.Len())
+		body = r
+	case *os.File:
+		if info, err := r.Stat(); err == nil {
+			contentLength = info.Size()
+			// Get current position
+			pos, _ := r.Seek(0, io.SeekCurrent)
+			contentLength -= pos
+		}
+		body = r
+	case io.ReadSeeker:
+		// Generic seeker - try to determine size
+		pos, err := r.Seek(0, io.SeekCurrent)
+		if err == nil {
+			end, err := r.Seek(0, io.SeekEnd)
+			if err == nil {
+				contentLength = end - pos
+				r.Seek(pos, io.SeekStart) // Reset to original position
+			}
+		}
+		body = r
+	default:
+		// Fallback: buffer for unknown readers (required for S3 PutObject)
+		// For large files, use ChunkedUploader interface instead
+		data, err := io.ReadAll(content)
+		if err != nil {
+			return nil, filekit.NewPathError("write", filePath, err)
+		}
+		contentLength = int64(len(data))
+		body = bytes.NewReader(data)
 	}
 
 	// Prepare upload input
 	input := &s3.PutObjectInput{
 		Bucket:            aws.String(a.bucket),
 		Key:               aws.String(key),
-		Body:              bytes.NewReader(data),
+		Body:              body,
 		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+	}
+
+	// Set content length if known
+	if contentLength >= 0 {
+		input.ContentLength = aws.Int64(contentLength)
 	}
 
 	// Set content type if provided
@@ -109,8 +153,14 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 		return nil, mapS3Error("write", filePath, err)
 	}
 
+	// Get bytes written from content length or response
+	bytesWritten := contentLength
+	if bytesWritten < 0 {
+		bytesWritten = 0
+	}
+
 	return &filekit.WriteResult{
-		BytesWritten:      int64(len(data)),
+		BytesWritten:      bytesWritten,
 		ETag:              aws.ToString(result.ETag),
 		Version:           aws.ToString(result.VersionId),
 		Checksum:          aws.ToString(result.ChecksumSHA256),
