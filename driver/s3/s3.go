@@ -439,11 +439,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 
 	// If no objects found, the directory doesn't exist
 	if len(resp.Contents) == 0 {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, filekit.ErrNotExist)
 	}
 
 	// Delete all objects with the prefix
@@ -654,20 +650,12 @@ func mapS3Error(op, filePath string, err error) error {
 	var notFound *types.NotFound
 
 	if errors.As(err, &nsk) || errors.As(err, &notFound) {
-		return &filekit.PathError{
-			Op:   op,
-			Path: filePath,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr(op, filePath, filekit.ErrNotExist)
 	}
 
 	// Map other specific errors here
 
-	return &filekit.PathError{
-		Op:   op,
-		Path: filePath,
-		Err:  err,
-	}
+	return filekit.WrapPathErr(op, filePath, err)
 }
 
 // ============================================================================
@@ -746,7 +734,7 @@ func (a *Adapter) Checksum(ctx context.Context, filePath string, algorithm filek
 
 	checksum, err := filekit.CalculateChecksum(reader, algorithm)
 	if err != nil {
-		return "", &filekit.PathError{Op: "checksum", Path: filePath, Err: err}
+		return "", filekit.WrapPathErr("checksum", filePath, err)
 	}
 
 	return checksum, nil
@@ -762,7 +750,7 @@ func (a *Adapter) Checksums(ctx context.Context, filePath string, algorithms []f
 
 	checksums, err := filekit.CalculateChecksums(reader, algorithms)
 	if err != nil {
-		return nil, &filekit.PathError{Op: "checksums", Path: filePath, Err: err}
+		return nil, filekit.WrapPathErr("checksums", filePath, err)
 	}
 
 	return checksums, nil
@@ -818,7 +806,7 @@ func (a *Adapter) getMatchingFilesState(ctx context.Context, filter string) (map
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return nil, &filekit.PathError{Op: "watch", Path: filter, Err: err}
+			return nil, filekit.WrapPathErr("watch", filter, err)
 		}
 
 		for _, obj := range page.Contents {

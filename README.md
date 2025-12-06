@@ -1342,35 +1342,97 @@ err := filekit.WriteWithProgress(ctx, fs, "large-file.zip", file, info.Size(), &
 
 ## Error Handling
 
-### Error Types
+FileKit provides a comprehensive error handling system with stable error codes, categories, and rich metadata for production use.
+
+### Error Codes (Stable API)
+
+19 stable error codes that will never change (values are part of the public API contract):
 
 ```go
-var (
-    ErrNotExist      = errors.New("file does not exist")
-    ErrExist         = errors.New("file already exists")
-    ErrPermission    = errors.New("permission denied")
-    ErrClosed        = errors.New("file already closed")
-    ErrNotDir        = errors.New("not a directory")
-    ErrIsDir         = errors.New("is a directory")
-    ErrNotEmpty      = errors.New("directory not empty")
-    ErrInvalidName   = errors.New("invalid name")
-    ErrInvalidOffset = errors.New("invalid offset")
-    ErrInvalidWhence = errors.New("invalid whence")
-    ErrNotSupported  = errors.New("operation not supported")
-    ErrNotAllowed    = errors.New("operation not allowed")
-    ErrInvalidSize   = errors.New("invalid file size")
-    ErrNoSpace       = errors.New("no space left on device")
+const (
+    // Existence
+    ErrCodeNotFound      ErrorCode = "FILEKIT_NOT_FOUND"
+    ErrCodeAlreadyExists ErrorCode = "FILEKIT_ALREADY_EXISTS"
+    ErrCodeTypeMismatch  ErrorCode = "FILEKIT_TYPE_MISMATCH"
+
+    // Access
+    ErrCodePermission ErrorCode = "FILEKIT_PERMISSION"
+    ErrCodeAuth       ErrorCode = "FILEKIT_AUTH"
+    ErrCodeQuota      ErrorCode = "FILEKIT_QUOTA"
+
+    // Validation
+    ErrCodeInvalidInput ErrorCode = "FILEKIT_INVALID_INPUT"
+    ErrCodeValidation   ErrorCode = "FILEKIT_VALIDATION"
+
+    // Integrity (cryptographic/data integrity failures)
+    ErrCodeIntegrity ErrorCode = "FILEKIT_INTEGRITY"
+
+    // Operation
+    ErrCodeNotSupported ErrorCode = "FILEKIT_NOT_SUPPORTED"
+    ErrCodeAborted      ErrorCode = "FILEKIT_ABORTED"
+    ErrCodeTimeout      ErrorCode = "FILEKIT_TIMEOUT"
+    ErrCodeClosed       ErrorCode = "FILEKIT_CLOSED"
+
+    // Infrastructure
+    ErrCodeIO        ErrorCode = "FILEKIT_IO"
+    ErrCodeNetwork   ErrorCode = "FILEKIT_NETWORK"
+    ErrCodeService   ErrorCode = "FILEKIT_SERVICE"
+    ErrCodeRateLimit ErrorCode = "FILEKIT_RATE_LIMIT"
+
+    // Mount
+    ErrCodeMount ErrorCode = "FILEKIT_MOUNT"
+
+    // Internal
+    ErrCodeInternal ErrorCode = "FILEKIT_INTERNAL"
 )
 ```
 
-### PathError
+### FileError (Primary Error Type)
 
 ```go
-type PathError struct {
-    Op   string // Operation that failed
-    Path string // Path involved
-    Err  error  // Underlying error
+type FileError struct {
+    ErrCode    ErrorCode         // Stable error code
+    Message    string            // Human-readable message
+    Cat        ErrorCategory     // Error category
+    Op         string            // Operation that failed
+    Path       string            // Path involved
+    Driver     string            // Driver name
+    Err        error             // Underlying error
+    Retry      bool              // Whether retry may help
+    RetryDelay time.Duration     // Suggested retry delay
+    Detail     map[string]any    // Additional context
+    Timestamp  time.Time         // When error occurred
+    RequestID  string            // Request ID for tracing
 }
+
+// Implements multiple interfaces
+func (e *FileError) Code() ErrorCode           // Get error code
+func (e *FileError) Category() ErrorCategory   // Get category
+func (e *FileError) IsRetryable() bool         // Check if retryable
+func (e *FileError) RetryAfter() time.Duration // Get retry delay
+func (e *FileError) HTTPStatus() int           // Get HTTP status code
+func (e *FileError) Details() map[string]any   // Get additional details
+
+// Fluent builders
+func (e *FileError) WithCause(err error) *FileError
+func (e *FileError) WithDriver(d string) *FileError
+func (e *FileError) WithRetry(r bool, d time.Duration) *FileError
+func (e *FileError) WithDetail(k string, v any) *FileError
+```
+
+### Error Categories
+
+```go
+const (
+    CategoryUnknown      // Unknown category
+    CategoryNotFound     // Resource missing
+    CategoryConflict     // Already exists
+    CategoryPermission   // Access denied
+    CategoryValidation   // Bad input
+    CategoryTransient    // Retry may help (network, rate limit)
+    CategoryPermanent    // Don't retry
+    CategoryNotSupported // Feature unavailable
+)
 ```
 
 ### Error Checking
@@ -1378,22 +1440,88 @@ type PathError struct {
 ```go
 _, err := fs.Read(ctx, "nonexistent.txt")
 if err != nil {
-    var pathErr *filekit.PathError
-    if errors.As(err, &pathErr) {
-        fmt.Printf("Operation: %s\n", pathErr.Op)
-        fmt.Printf("Path: %s\n", pathErr.Path)
-        fmt.Printf("Error: %v\n", pathErr.Err)
+    // Check by error code
+    if filekit.IsCode(err, filekit.ErrCodeNotFound) {
+        fmt.Println("File not found")
     }
 
-    // Use helper functions
-    if filekit.IsNotExist(err) {
+    // Check by category
+    if filekit.GetCategory(err) == filekit.CategoryTransient {
+        fmt.Println("Temporary error, retry may help")
+    }
+
+    // Semantic helpers (also work with standard library errors)
+    if filekit.IsNotFound(err) {
         fmt.Println("File does not exist")
-    } else if filekit.IsPermission(err) {
+    } else if filekit.IsPermissionErr(err) {
         fmt.Println("Permission denied")
-    } else if filekit.IsExist(err) {
-        fmt.Println("File already exists")
+    } else if filekit.IsValidationErr(err) {
+        fmt.Println("Validation failed")
+    }
+
+    // Check if retryable
+    if filekit.IsRetryableErr(err) {
+        delay := filekit.GetRetryAfter(err)
+        time.Sleep(delay)
+        // Retry operation...
+    }
+
+    // Get HTTP status for API responses
+    var fileErr *filekit.FileError
+    if errors.As(err, &fileErr) {
+        http.Error(w, fileErr.Message, fileErr.HTTPStatus())
+    }
+
+    // Access rich error details
+    if fileErr, ok := err.(*filekit.FileError); ok {
+        fmt.Printf("Code: %s\n", fileErr.Code())
+        fmt.Printf("Category: %s\n", fileErr.Category())
+        fmt.Printf("Operation: %s\n", fileErr.Op)
+        fmt.Printf("Path: %s\n", fileErr.Path)
+        if details := fileErr.Details(); details != nil {
+            fmt.Printf("Details: %v\n", details)
+        }
     }
 }
+```
+
+### MultiError (Batch Operations)
+
+```go
+// Collect errors from batch operations
+multi := filekit.NewMultiError("batch_delete")
+
+for _, path := range paths {
+    err := fs.Delete(ctx, path)
+    multi.Add(err) // Tracks both errors and total count
+}
+
+if multi.HasErrors() {
+    if multi.PartialSuccess() {
+        fmt.Printf("Partial success: %s\n", multi.Error())
+        // "batch_delete: 3/10 operations failed"
+    }
+    // Access individual errors
+    for _, err := range multi.Unwrap() {
+        fmt.Println(err)
+    }
+}
+
+// Returns nil if no errors, single error if one, MultiError if multiple
+return multi.Err()
+```
+
+### Backward Compatibility
+
+Legacy error variables are still available for compatibility:
+
+```go
+var (
+    ErrNotExist   = fs.ErrNotExist   // Use IsNotFound() instead
+    ErrExist      = fs.ErrExist      // Use IsCode(err, ErrCodeAlreadyExists)
+    ErrPermission = fs.ErrPermission // Use IsPermissionErr() instead
+    // ... etc
+)
 ```
 
 ---

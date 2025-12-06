@@ -507,11 +507,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 	}
 
 	if !found {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, filekit.ErrNotExist)
 	}
 
 	return nil
@@ -654,44 +650,24 @@ func detectContentType(filePath string) string {
 // mapAzureError maps Azure errors to filekit errors
 func mapAzureError(op, path string, err error) error {
 	if bloberror.HasCode(err, bloberror.BlobNotFound) {
-		return &filekit.PathError{
-			Op:   op,
-			Path: path,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr(op, path, filekit.ErrNotExist)
 	}
 
 	if bloberror.HasCode(err, bloberror.ContainerNotFound) {
-		return &filekit.PathError{
-			Op:   op,
-			Path: path,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr(op, path, filekit.ErrNotExist)
 	}
 
 	var respErr *azcore.ResponseError
 	if errors.As(err, &respErr) {
 		if respErr.StatusCode == http.StatusNotFound {
-			return &filekit.PathError{
-				Op:   op,
-				Path: path,
-				Err:  filekit.ErrNotExist,
-			}
+			return filekit.WrapPathErr(op, path, filekit.ErrNotExist)
 		}
 		if respErr.StatusCode == http.StatusForbidden {
-			return &filekit.PathError{
-				Op:   op,
-				Path: path,
-				Err:  filekit.ErrPermission,
-			}
+			return filekit.WrapPathErr(op, path, filekit.ErrPermission)
 		}
 	}
 
-	return &filekit.PathError{
-		Op:   op,
-		Path: path,
-		Err:  err,
-	}
+	return filekit.WrapPathErr(op, path, err)
 }
 
 // ============================================================================
@@ -741,7 +717,7 @@ func (a *Adapter) Checksum(ctx context.Context, filePath string, algorithm filek
 
 	checksum, err := filekit.CalculateChecksum(reader, algorithm)
 	if err != nil {
-		return "", &filekit.PathError{Op: "checksum", Path: filePath, Err: err}
+		return "", filekit.WrapPathErr("checksum", filePath, err)
 	}
 
 	return checksum, nil
@@ -757,7 +733,7 @@ func (a *Adapter) Checksums(ctx context.Context, filePath string, algorithms []f
 
 	checksums, err := filekit.CalculateChecksums(reader, algorithms)
 	if err != nil {
-		return nil, &filekit.PathError{Op: "checksums", Path: filePath, Err: err}
+		return nil, filekit.WrapPathErr("checksums", filePath, err)
 	}
 
 	return checksums, nil
@@ -812,7 +788,7 @@ func (a *Adapter) getMatchingFilesState(ctx context.Context, filter string) (map
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			return nil, &filekit.PathError{Op: "watch", Path: filter, Err: err}
+			return nil, filekit.WrapPathErr("watch", filter, err)
 		}
 
 		for _, blob := range page.Segment.BlobItems {
@@ -928,11 +904,7 @@ func (a *Adapter) InitiateUpload(ctx context.Context, filePath string) (string, 
 	// Generate a unique upload ID
 	uploadID, err := generateAzureUploadID()
 	if err != nil {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: filePath,
-			Err:  err,
-		}
+		return "", filekit.WrapPathErr("initiate-upload", filePath, err)
 	}
 
 	// Store upload info
@@ -951,11 +923,7 @@ func (a *Adapter) InitiateUpload(ctx context.Context, filePath string) (string, 
 func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) error {
 	// Validate part number
 	if partNumber < 1 {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("part number must be >= 1, got %d", partNumber),
-		}
+		return filekit.NewPathError("upload-part", uploadID, filekit.ErrCodeValidation, fmt.Sprintf("part number must be >= 1, got %d", partNumber))
 	}
 
 	// Get upload info
@@ -964,11 +932,7 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 	azureUploadRegistry.RUnlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("upload-part", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// Generate block ID
@@ -981,11 +945,7 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 	// Stage the block
 	_, err := blockBlobClient.StageBlock(ctx, blockID, &readSeekCloser{data: data}, nil)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("failed to stage block: %w", err),
-		}
+		return filekit.WrapPathErr("upload-part", uploadID, fmt.Errorf("failed to stage block: %w", err))
 	}
 
 	// Record the block ID (thread-safe)
@@ -1049,11 +1009,7 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	azureUploadRegistry.Unlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("complete-upload", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// Filter out empty block IDs and collect valid ones
@@ -1067,11 +1023,7 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	info.mu.Unlock()
 
 	if len(validBlockIDs) == 0 {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  errors.New("no parts uploaded"),
-		}
+		return filekit.NewPathError("complete-upload", uploadID, filekit.ErrCodeValidation, "no parts uploaded")
 	}
 
 	// Sort block IDs by their part number (they're base64 encoded, but in order)
@@ -1084,11 +1036,7 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	// Commit the block list
 	_, err := blockBlobClient.CommitBlockList(ctx, validBlockIDs, &blockblob.CommitBlockListOptions{})
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: info.path,
-			Err:  fmt.Errorf("failed to commit block list: %w", err),
-		}
+		return filekit.WrapPathErr("complete-upload", info.path, fmt.Errorf("failed to commit block list: %w", err))
 	}
 
 	return nil
@@ -1106,11 +1054,7 @@ func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
 	azureUploadRegistry.Unlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "abort-upload",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("abort-upload", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// Azure automatically cleans up uncommitted blocks after 7 days

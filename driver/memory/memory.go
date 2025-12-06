@@ -90,13 +90,13 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 
 	// Validate path
 	if !isValidPath(path) {
-		return nil, filekit.NewPathError("write", path, filekit.ErrNotAllowed)
+		return nil, filekit.WrapPathErr("write", path, filekit.ErrNotAllowed)
 	}
 
 	// Read content into memory
 	data, err := io.ReadAll(content)
 	if err != nil {
-		return nil, filekit.NewPathError("write", path, err)
+		return nil, filekit.WrapPathErr("write", path, err)
 	}
 
 	opts := processOptions(options...)
@@ -107,7 +107,7 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	// Check if file exists and overwrite is not allowed
 	if existing, exists := a.files[path]; exists {
 		if !opts.Overwrite {
-			return nil, filekit.NewPathError("write", path, filekit.ErrExist)
+			return nil, filekit.WrapPathErr("write", path, filekit.ErrExist)
 		}
 		// Subtract old file size
 		a.size -= int64(len(existing.content))
@@ -116,7 +116,7 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	// Check max size limit
 	newSize := a.size + int64(len(data))
 	if a.maxSize > 0 && newSize > a.maxSize {
-		return nil, filekit.NewPathError("write", path, filekit.ErrInvalidSize)
+		return nil, filekit.WrapPathErr("write", path, filekit.ErrInvalidSize)
 	}
 
 	// Ensure parent directories exist
@@ -170,12 +170,7 @@ func (a *Adapter) Read(ctx context.Context, path string) (io.ReadCloser, error) 
 
 	file, exists := a.files[path]
 	if !exists {
-		return nil, &filekit.PathError{
-			Op:   "read",
-			Path: path,
-			Err:  filekit.ErrNotExist,
-			Code: filekit.ErrCodeNotFound,
-		}
+		return nil, filekit.WrapPathErr("read", path, filekit.ErrNotExist)
 	}
 
 	// Return a copy of the content to prevent modification
@@ -207,11 +202,7 @@ func (a *Adapter) Delete(ctx context.Context, path string) error {
 
 	file, exists := a.files[path]
 	if !exists {
-		return &filekit.PathError{
-			Op:   "delete",
-			Path: path,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr("delete", path, filekit.ErrNotExist)
 	}
 
 	a.size -= int64(len(file.content))
@@ -296,11 +287,7 @@ func (a *Adapter) Stat(ctx context.Context, path string) (*filekit.FileInfo, err
 		}, nil
 	}
 
-	return nil, &filekit.PathError{
-		Op:   "stat",
-		Path: path,
-		Err:  filekit.ErrNotExist,
-	}
+	return nil, filekit.WrapPathErr("stat", path, filekit.ErrNotExist)
 }
 
 // ListContents implements filekit.FileSystem
@@ -320,17 +307,9 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 	if _, exists := a.dirs[path]; !exists {
 		// Check if it's a file
 		if _, isFile := a.files[path]; isFile {
-			return nil, &filekit.PathError{
-				Op:   "listcontents",
-				Path: path,
-				Err:  filekit.ErrNotDir,
-			}
+			return nil, filekit.WrapPathErr("listcontents", path, filekit.ErrNotDir)
 		}
-		return nil, &filekit.PathError{
-			Op:   "listcontents",
-			Path: path,
-			Err:  filekit.ErrNotExist,
-		}
+		return nil, filekit.WrapPathErr("listcontents", path, filekit.ErrNotExist)
 	}
 
 	var files []filekit.FileInfo
@@ -490,11 +469,7 @@ func (a *Adapter) CreateDir(ctx context.Context, path string) error {
 	path = normalizePath(path)
 
 	if !isValidPath(path) {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("createdir", path, filekit.ErrNotAllowed)
 	}
 
 	a.mu.Lock()
@@ -502,11 +477,7 @@ func (a *Adapter) CreateDir(ctx context.Context, path string) error {
 
 	// Check if file exists at this path
 	if _, exists := a.files[path]; exists {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: path,
-			Err:  filekit.ErrExist,
-		}
+		return filekit.WrapPathErr("createdir", path, filekit.ErrExist)
 	}
 
 	// Ensure parent directories exist
@@ -535,17 +506,9 @@ func (a *Adapter) DeleteDir(ctx context.Context, path string) error {
 	if _, exists := a.dirs[path]; !exists {
 		// Check if it's a file
 		if _, isFile := a.files[path]; isFile {
-			return &filekit.PathError{
-				Op:   "deletedir",
-				Path: path,
-				Err:  filekit.ErrNotDir,
-			}
+			return filekit.WrapPathErr("deletedir", path, filekit.ErrNotDir)
 		}
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: path,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr("deletedir", path, filekit.ErrNotExist)
 	}
 
 	// Delete directory and all contents
@@ -587,7 +550,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, path string) error {
 
 // WriteFile implements filekit.FileWriter
 func (a *Adapter) WriteFile(ctx context.Context, path string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
-	return nil, filekit.NewPathError("writefile", localPath, filekit.ErrNotSupported)
+	return nil, filekit.WrapPathErr("writefile", localPath, filekit.ErrNotSupported)
 }
 
 // Clear removes all files and directories from the memory filesystem
@@ -692,7 +655,7 @@ func (a *Adapter) Copy(ctx context.Context, src, dst string) error {
 	dst = normalizePath(dst)
 
 	if !isValidPath(src) || !isValidPath(dst) {
-		return &filekit.PathError{Op: "copy", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("copy", src, filekit.ErrNotAllowed)
 	}
 
 	a.mu.Lock()
@@ -701,12 +664,12 @@ func (a *Adapter) Copy(ctx context.Context, src, dst string) error {
 	// Get source file
 	srcFile, exists := a.files[src]
 	if !exists {
-		return &filekit.PathError{Op: "copy", Path: src, Err: filekit.ErrNotExist}
+		return filekit.WrapPathErr("copy", src, filekit.ErrNotExist)
 	}
 
 	// Check size limit
 	if a.maxSize > 0 && a.size+int64(len(srcFile.content)) > a.maxSize {
-		return &filekit.PathError{Op: "copy", Path: dst, Err: filekit.ErrNoSpace}
+		return filekit.WrapPathErr("copy", dst, filekit.ErrNoSpace)
 	}
 
 	// Ensure parent directories exist
@@ -747,7 +710,7 @@ func (a *Adapter) Move(ctx context.Context, src, dst string) error {
 	dst = normalizePath(dst)
 
 	if !isValidPath(src) || !isValidPath(dst) {
-		return &filekit.PathError{Op: "move", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("move", src, filekit.ErrNotAllowed)
 	}
 
 	a.mu.Lock()
@@ -756,7 +719,7 @@ func (a *Adapter) Move(ctx context.Context, src, dst string) error {
 	// Get source file
 	srcFile, exists := a.files[src]
 	if !exists {
-		return &filekit.PathError{Op: "move", Path: src, Err: filekit.ErrNotExist}
+		return filekit.WrapPathErr("move", src, filekit.ErrNotExist)
 	}
 
 	// Ensure parent directories exist
@@ -791,12 +754,12 @@ func (a *Adapter) Checksum(ctx context.Context, path string, algorithm filekit.C
 
 	file, exists := a.files[path]
 	if !exists {
-		return "", &filekit.PathError{Op: "checksum", Path: path, Err: filekit.ErrNotExist}
+		return "", filekit.WrapPathErr("checksum", path, filekit.ErrNotExist)
 	}
 
 	checksum, err := filekit.CalculateChecksum(bytes.NewReader(file.content), algorithm)
 	if err != nil {
-		return "", &filekit.PathError{Op: "checksum", Path: path, Err: err}
+		return "", filekit.WrapPathErr("checksum", path, err)
 	}
 
 	return checksum, nil
@@ -817,12 +780,12 @@ func (a *Adapter) Checksums(ctx context.Context, path string, algorithms []filek
 
 	file, exists := a.files[path]
 	if !exists {
-		return nil, &filekit.PathError{Op: "checksums", Path: path, Err: filekit.ErrNotExist}
+		return nil, filekit.WrapPathErr("checksums", path, filekit.ErrNotExist)
 	}
 
 	checksums, err := filekit.CalculateChecksums(bytes.NewReader(file.content), algorithms)
 	if err != nil {
-		return nil, &filekit.PathError{Op: "checksums", Path: path, Err: err}
+		return nil, filekit.WrapPathErr("checksums", path, err)
 	}
 
 	return checksums, nil
@@ -844,11 +807,7 @@ func (a *Adapter) Watch(ctx context.Context, filter string) (filekit.ChangeToken
 	// Validate the glob pattern
 	_, err := glob.Compile(filter)
 	if err != nil {
-		return nil, &filekit.PathError{
-			Op:   "watch",
-			Path: filter,
-			Err:  err,
-		}
+		return nil, filekit.WrapPathErr("watch", filter, err)
 	}
 
 	token := filekit.NewCallbackChangeToken()

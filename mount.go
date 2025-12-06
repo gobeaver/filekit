@@ -2,28 +2,12 @@ package filekit
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"path"
 	"sort"
 	"strings"
 	"sync"
-)
-
-var (
-	// ErrMountNotFound is returned when no mount point matches the path
-	ErrMountNotFound = errors.New("no mount point found for path")
-	// ErrMountExists is returned when trying to mount at an existing path
-	ErrMountExists = errors.New("mount point already exists")
-	// ErrInvalidMountPath is returned when the mount path is invalid
-	ErrInvalidMountPath = errors.New("invalid mount path")
-	// ErrEmptyMountPath is returned when the mount path is empty
-	ErrEmptyMountPath = errors.New("mount path cannot be empty")
-	// ErrNilDriver is returned when trying to mount a nil driver
-	ErrNilDriver = errors.New("driver cannot be nil")
-	// ErrCrossMount is returned when an operation cannot cross mount boundaries
-	ErrCrossMount = errors.New("operation cannot cross mount boundaries")
 )
 
 // MountManager provides virtual path namespacing for multiple filesystems.
@@ -492,11 +476,7 @@ func (m *MountManager) Checksum(ctx context.Context, filePath string, algorithm 
 		return checksummer.Checksum(ctx, relativePath, algorithm)
 	}
 
-	return "", &PathError{
-		Op:   "checksum",
-		Path: filePath,
-		Err:  ErrNotSupported,
-	}
+	return "", NewPathError("checksum", filePath, ErrCodeNotSupported, "underlying filesystem does not support checksums")
 }
 
 // Checksums implements CanChecksum by delegating to the underlying mount.
@@ -511,11 +491,7 @@ func (m *MountManager) Checksums(ctx context.Context, filePath string, algorithm
 		return checksummer.Checksums(ctx, relativePath, algorithms)
 	}
 
-	return nil, &PathError{
-		Op:   "checksums",
-		Path: filePath,
-		Err:  ErrNotSupported,
-	}
+	return nil, NewPathError("checksums", filePath, ErrCodeNotSupported, "underlying filesystem does not support checksums")
 }
 
 // ============================================================================

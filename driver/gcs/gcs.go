@@ -73,7 +73,7 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	if !opts.Overwrite {
 		_, err := obj.Attrs(ctx)
 		if err == nil {
-			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
+			return nil, filekit.WrapPathErr("write", filePath, filekit.ErrExist)
 		}
 		if !errors.Is(err, storage.ErrObjectNotExist) {
 			return nil, mapGCSError("write", filePath, err)
@@ -407,11 +407,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 	}
 
 	if !found {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, filekit.ErrNotExist)
 	}
 
 	return nil
@@ -421,7 +417,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return nil, filekit.NewPathError("writefile", localPath, err)
+		return nil, filekit.WrapPathErr("writefile", localPath, err)
 	}
 	defer file.Close()
 
@@ -552,26 +548,14 @@ func detectContentType(filePath string) string {
 // mapGCSError maps GCS errors to filekit errors
 func mapGCSError(op, path string, err error) error {
 	if errors.Is(err, storage.ErrObjectNotExist) {
-		return &filekit.PathError{
-			Op:   op,
-			Path: path,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr(op, path, filekit.ErrNotExist)
 	}
 
 	if errors.Is(err, storage.ErrBucketNotExist) {
-		return &filekit.PathError{
-			Op:   op,
-			Path: path,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr(op, path, filekit.ErrNotExist)
 	}
 
-	return &filekit.PathError{
-		Op:   op,
-		Path: path,
-		Err:  err,
-	}
+	return filekit.WrapPathErr(op, path, err)
 }
 
 // ============================================================================
@@ -631,7 +615,7 @@ func (a *Adapter) Checksum(ctx context.Context, filePath string, algorithm filek
 
 	checksum, err := filekit.CalculateChecksum(reader, algorithm)
 	if err != nil {
-		return "", &filekit.PathError{Op: "checksum", Path: filePath, Err: err}
+		return "", filekit.WrapPathErr("checksum", filePath, err)
 	}
 
 	return checksum, nil
@@ -647,7 +631,7 @@ func (a *Adapter) Checksums(ctx context.Context, filePath string, algorithms []f
 
 	checksums, err := filekit.CalculateChecksums(reader, algorithms)
 	if err != nil {
-		return nil, &filekit.PathError{Op: "checksums", Path: filePath, Err: err}
+		return nil, filekit.WrapPathErr("checksums", filePath, err)
 	}
 
 	return checksums, nil
@@ -705,7 +689,7 @@ func (a *Adapter) getMatchingFilesState(ctx context.Context, filter string) (map
 			break
 		}
 		if err != nil {
-			return nil, &filekit.PathError{Op: "watch", Path: filter, Err: err}
+			return nil, filekit.WrapPathErr("watch", filter, err)
 		}
 
 		// Remove prefix from key to get relative path
@@ -796,11 +780,7 @@ func (a *Adapter) InitiateUpload(ctx context.Context, filePath string) (string, 
 	// Generate a unique upload ID
 	uploadID, err := generateGCSUploadID()
 	if err != nil {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: filePath,
-			Err:  err,
-		}
+		return "", filekit.WrapPathErr("initiate-upload", filePath, err)
 	}
 
 	// Create prefix for temporary parts: .filekit-uploads/{uploadID}/
@@ -823,11 +803,7 @@ func (a *Adapter) InitiateUpload(ctx context.Context, filePath string) (string, 
 func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) error {
 	// Validate part number
 	if partNumber < 1 {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("part number must be >= 1, got %d", partNumber),
-		}
+		return filekit.NewPathError("upload-part", uploadID, filekit.ErrCodeValidation, fmt.Sprintf("part number must be >= 1, got %d", partNumber))
 	}
 
 	// Get upload info
@@ -836,11 +812,7 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 	gcsUploadRegistry.RUnlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("upload-part", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// Write part to GCS
@@ -850,19 +822,11 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 
 	if _, err := writer.Write(data); err != nil {
 		writer.Close()
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("failed to write part data: %w", err),
-		}
+		return filekit.WrapPathErr("upload-part", uploadID, fmt.Errorf("failed to write part data: %w", err))
 	}
 
 	if err := writer.Close(); err != nil {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("failed to close part writer: %w", err),
-		}
+		return filekit.WrapPathErr("upload-part", uploadID, fmt.Errorf("failed to close part writer: %w", err))
 	}
 
 	return nil
@@ -881,11 +845,7 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	gcsUploadRegistry.Unlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("complete-upload", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// List all part objects
@@ -900,21 +860,13 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 			break
 		}
 		if err != nil {
-			return &filekit.PathError{
-				Op:   "complete-upload",
-				Path: uploadID,
-				Err:  err,
-			}
+			return filekit.WrapPathErr("complete-upload", uploadID, err)
 		}
 		partKeys = append(partKeys, attrs.Name)
 	}
 
 	if len(partKeys) == 0 {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  errors.New("no parts uploaded"),
-		}
+		return filekit.NewPathError("complete-upload", uploadID, filekit.ErrCodeValidation, "no parts uploaded")
 	}
 
 	// Sort parts by part number
@@ -941,21 +893,13 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 		composer := targetObj.ComposerFrom(sources...)
 		if _, err := composer.Run(ctx); err != nil {
 			a.cleanupGCSParts(ctx, bkt, partKeys)
-			return &filekit.PathError{
-				Op:   "complete-upload",
-				Path: info.path,
-				Err:  fmt.Errorf("failed to compose parts: %w", err),
-			}
+			return filekit.WrapPathErr("complete-upload", info.path, fmt.Errorf("failed to compose parts: %w", err))
 		}
 	} else {
 		// Complex case: iterative composition
 		if err := a.composeIteratively(ctx, bkt, partKeys, targetKey); err != nil {
 			a.cleanupGCSParts(ctx, bkt, partKeys)
-			return &filekit.PathError{
-				Op:   "complete-upload",
-				Path: info.path,
-				Err:  err,
-			}
+			return filekit.WrapPathErr("complete-upload", info.path, err)
 		}
 	}
 
@@ -1059,11 +1003,7 @@ func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
 	gcsUploadRegistry.Unlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "abort-upload",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("abort-upload", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// List and delete all part objects
@@ -1077,11 +1017,7 @@ func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
 			break
 		}
 		if err != nil {
-			return &filekit.PathError{
-				Op:   "abort-upload",
-				Path: uploadID,
-				Err:  err,
-			}
+			return filekit.WrapPathErr("abort-upload", uploadID, err)
 		}
 		bkt.Object(attrs.Name).Delete(ctx)
 	}

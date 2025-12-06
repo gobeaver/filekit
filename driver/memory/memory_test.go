@@ -674,7 +674,7 @@ func TestWriteFile(t *testing.T) {
 	a := New()
 
 	t.Run("returns not supported error", func(t *testing.T) {
-		err := a.WriteFile(ctx, "dest.txt", "/local/file.txt")
+		_, err := a.WriteFile(ctx, "dest.txt", "/local/file.txt")
 		if err == nil {
 			t.Fatal("expected error")
 		}

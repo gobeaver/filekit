@@ -390,11 +390,7 @@ func (a *Adapter) Read(ctx context.Context, filePath string) (io.ReadCloser, err
 	// Check pending first (for read-write mode)
 	if entry, exists := a.pending[filePath]; exists {
 		if entry == nil || entry.isDir {
-			return nil, &filekit.PathError{
-				Op:   "read",
-				Path: filePath,
-				Err:  filekit.ErrNotExist,
-			}
+			return nil, filekit.WrapPathErr("read", filePath, filekit.ErrNotExist)
 		}
 		return io.NopCloser(bytes.NewReader(entry.content)), nil
 	}
@@ -402,19 +398,11 @@ func (a *Adapter) Read(ctx context.Context, filePath string) (io.ReadCloser, err
 	// Check files index
 	entry, exists := a.files[filePath]
 	if !exists {
-		return nil, &filekit.PathError{
-			Op:   "read",
-			Path: filePath,
-			Err:  filekit.ErrNotExist,
-		}
+		return nil, filekit.WrapPathErr("read", filePath, filekit.ErrNotExist)
 	}
 
 	if entry.isDir {
-		return nil, &filekit.PathError{
-			Op:   "read",
-			Path: filePath,
-			Err:  filekit.ErrIsDir,
-		}
+		return nil, filekit.WrapPathErr("read", filePath, filekit.ErrIsDir)
 	}
 
 	// If we have content in memory (read-write mode)
@@ -431,11 +419,7 @@ func (a *Adapter) Read(ctx context.Context, filePath string) (io.ReadCloser, err
 		}
 	}
 
-	return nil, &filekit.PathError{
-		Op:   "read",
-		Path: filePath,
-		Err:  filekit.ErrNotExist,
-	}
+	return nil, filekit.WrapPathErr("read", filePath, filekit.ErrNotExist)
 }
 
 // ReadAll reads the entire file contents
@@ -460,11 +444,7 @@ func (a *Adapter) Delete(ctx context.Context, filePath string) error {
 	defer a.mu.Unlock()
 
 	if a.mode == ModeRead {
-		return &filekit.PathError{
-			Op:   "delete",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("delete", filePath, filekit.ErrNotAllowed)
 	}
 
 	filePath = normalizePath(filePath)
@@ -474,11 +454,7 @@ func (a *Adapter) Delete(ctx context.Context, filePath string) error {
 	_, inPending := a.pending[filePath]
 
 	if !inFiles && !inPending {
-		return &filekit.PathError{
-			Op:   "delete",
-			Path: filePath,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr("delete", filePath, filekit.ErrNotExist)
 	}
 
 	// Mark as deleted
@@ -565,11 +541,7 @@ func (a *Adapter) Stat(ctx context.Context, filePath string) (*filekit.FileInfo,
 	// Check files
 	entry, exists := a.files[filePath]
 	if !exists {
-		return nil, &filekit.PathError{
-			Op:   "stat",
-			Path: filePath,
-			Err:  filekit.ErrNotExist,
-		}
+		return nil, filekit.WrapPathErr("stat", filePath, filekit.ErrNotExist)
 	}
 
 	var size int64
@@ -611,25 +583,13 @@ func (a *Adapter) ListContents(ctx context.Context, prefix string, recursive boo
 		pendingEntry, pendingExists := a.pending[prefix]
 
 		if exists && !entry.isDir {
-			return nil, &filekit.PathError{
-				Op:   "listcontents",
-				Path: prefix,
-				Err:  filekit.ErrNotDir,
-			}
+			return nil, filekit.WrapPathErr("listcontents", prefix, filekit.ErrNotDir)
 		}
 		if pendingExists && !pendingEntry.isDir {
-			return nil, &filekit.PathError{
-				Op:   "listcontents",
-				Path: prefix,
-				Err:  filekit.ErrNotDir,
-			}
+			return nil, filekit.WrapPathErr("listcontents", prefix, filekit.ErrNotDir)
 		}
 		if !exists && !pendingExists {
-			return nil, &filekit.PathError{
-				Op:   "listcontents",
-				Path: prefix,
-				Err:  filekit.ErrNotExist,
-			}
+			return nil, filekit.WrapPathErr("listcontents", prefix, filekit.ErrNotExist)
 		}
 	}
 
@@ -753,30 +713,18 @@ func (a *Adapter) CreateDir(ctx context.Context, dirPath string) error {
 	defer a.mu.Unlock()
 
 	if a.mode == ModeRead {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: dirPath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("createdir", dirPath, filekit.ErrNotAllowed)
 	}
 
 	dirPath = normalizePath(dirPath)
 
 	if !isValidPath(dirPath) {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: dirPath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("createdir", dirPath, filekit.ErrNotAllowed)
 	}
 
 	// Check if file exists at path
 	if entry, exists := a.files[dirPath]; exists && !entry.isDir {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: dirPath,
-			Err:  filekit.ErrExist,
-		}
+		return filekit.WrapPathErr("createdir", dirPath, filekit.ErrExist)
 	}
 
 	// For write mode, write directory entry to ZIP
@@ -790,11 +738,7 @@ func (a *Adapter) CreateDir(ctx context.Context, dirPath string) error {
 
 		_, err := a.writer.CreateHeader(header)
 		if err != nil {
-			return &filekit.PathError{
-				Op:   "createdir",
-				Path: dirPath,
-				Err:  err,
-			}
+			return filekit.WrapPathErr("createdir", dirPath, err)
 		}
 
 		a.files[dirPath] = &zipEntry{
@@ -825,11 +769,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 	defer a.mu.Unlock()
 
 	if a.mode == ModeRead {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, filekit.ErrNotAllowed)
 	}
 
 	dirPath = normalizePath(dirPath)
@@ -839,19 +779,11 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 	pendingEntry, inPending := a.pending[dirPath]
 
 	if !inFiles && !inPending {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, filekit.ErrNotExist)
 	}
 
 	if (inFiles && !entry.isDir) || (inPending && !pendingEntry.isDir) {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  filekit.ErrNotDir,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, filekit.ErrNotDir)
 	}
 
 	// Delete directory and all contents
@@ -965,14 +897,14 @@ func (a *Adapter) Copy(ctx context.Context, src, dst string) error {
 	defer a.mu.Unlock()
 
 	if a.mode == ModeRead {
-		return &filekit.PathError{Op: "copy", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("copy", src, filekit.ErrNotAllowed)
 	}
 
 	src = normalizePath(src)
 	dst = normalizePath(dst)
 
 	if !isValidPath(src) || !isValidPath(dst) {
-		return &filekit.PathError{Op: "copy", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("copy", src, filekit.ErrNotAllowed)
 	}
 
 	// Get source content
@@ -988,16 +920,16 @@ func (a *Adapter) Copy(ctx context.Context, src, dst string) error {
 			// Read from ZIP
 			rc, err := a.reader.Open(entry.header.Name)
 			if err != nil {
-				return &filekit.PathError{Op: "copy", Path: src, Err: err}
+				return filekit.WrapPathErr("copy", src, err)
 			}
 			content, err = io.ReadAll(rc)
 			rc.Close()
 			if err != nil {
-				return &filekit.PathError{Op: "copy", Path: src, Err: err}
+				return filekit.WrapPathErr("copy", src, err)
 			}
 		}
 	} else {
-		return &filekit.PathError{Op: "copy", Path: src, Err: filekit.ErrNotExist}
+		return filekit.WrapPathErr("copy", src, filekit.ErrNotExist)
 	}
 
 	// Create destination
@@ -1023,14 +955,14 @@ func (a *Adapter) Move(ctx context.Context, src, dst string) error {
 	defer a.mu.Unlock()
 
 	if a.mode == ModeRead {
-		return &filekit.PathError{Op: "move", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("move", src, filekit.ErrNotAllowed)
 	}
 
 	src = normalizePath(src)
 	dst = normalizePath(dst)
 
 	if !isValidPath(src) || !isValidPath(dst) {
-		return &filekit.PathError{Op: "move", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("move", src, filekit.ErrNotAllowed)
 	}
 
 	// Get source entry
@@ -1047,17 +979,17 @@ func (a *Adapter) Move(ctx context.Context, src, dst string) error {
 		} else if e.header != nil {
 			rc, err := a.reader.Open(e.header.Name)
 			if err != nil {
-				return &filekit.PathError{Op: "move", Path: src, Err: err}
+				return filekit.WrapPathErr("move", src, err)
 			}
 			content, err = io.ReadAll(rc)
 			rc.Close()
 			if err != nil {
-				return &filekit.PathError{Op: "move", Path: src, Err: err}
+				return filekit.WrapPathErr("move", src, err)
 			}
 		}
 		entry = &zipEntry{content: content, isDir: e.isDir}
 	} else {
-		return &filekit.PathError{Op: "move", Path: src, Err: filekit.ErrNotExist}
+		return filekit.WrapPathErr("move", src, filekit.ErrNotExist)
 	}
 
 	// Add to destination
@@ -1086,7 +1018,7 @@ func (a *Adapter) Checksum(ctx context.Context, filePath string, algorithm filek
 
 	checksum, err := filekit.CalculateChecksum(reader, algorithm)
 	if err != nil {
-		return "", &filekit.PathError{Op: "checksum", Path: filePath, Err: err}
+		return "", filekit.WrapPathErr("checksum", filePath, err)
 	}
 
 	return checksum, nil
@@ -1102,7 +1034,7 @@ func (a *Adapter) Checksums(ctx context.Context, filePath string, algorithms []f
 
 	checksums, err := filekit.CalculateChecksums(reader, algorithms)
 	if err != nil {
-		return nil, &filekit.PathError{Op: "checksums", Path: filePath, Err: err}
+		return nil, filekit.WrapPathErr("checksums", filePath, err)
 	}
 
 	return checksums, nil

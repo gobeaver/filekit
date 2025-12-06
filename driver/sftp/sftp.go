@@ -285,19 +285,11 @@ func (a *Adapter) Read(ctx context.Context, filePath string) (io.ReadCloser, err
 	}
 
 	if !a.isPathSafe(filePath) {
-		return nil, &filekit.PathError{
-			Op:   "read",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.WrapPathErr("read", filePath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return nil, &filekit.PathError{
-			Op:   "read",
-			Path: filePath,
-			Err:  err,
-		}
+		return nil, filekit.WrapPathErr("read", filePath, err)
 	}
 
 	fullPath := a.fullPath(filePath)
@@ -329,19 +321,11 @@ func (a *Adapter) Delete(ctx context.Context, filePath string) error {
 	}
 
 	if !a.isPathSafe(filePath) {
-		return &filekit.PathError{
-			Op:   "delete",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("delete", filePath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{
-			Op:   "delete",
-			Path: filePath,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("delete", filePath, err)
 	}
 
 	fullPath := a.fullPath(filePath)
@@ -362,19 +346,11 @@ func (a *Adapter) FileExists(ctx context.Context, filePath string) (bool, error)
 	}
 
 	if !a.isPathSafe(filePath) {
-		return false, &filekit.PathError{
-			Op:   "fileexists",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return false, filekit.WrapPathErr("fileexists", filePath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return false, &filekit.PathError{
-			Op:   "fileexists",
-			Path: filePath,
-			Err:  err,
-		}
+		return false, filekit.WrapPathErr("fileexists", filePath, err)
 	}
 
 	fullPath := a.fullPath(filePath)
@@ -404,19 +380,11 @@ func (a *Adapter) DirExists(ctx context.Context, dirPath string) (bool, error) {
 	}
 
 	if !a.isPathSafe(dirPath) {
-		return false, &filekit.PathError{
-			Op:   "direxists",
-			Path: dirPath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return false, filekit.WrapPathErr("direxists", dirPath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return false, &filekit.PathError{
-			Op:   "direxists",
-			Path: dirPath,
-			Err:  err,
-		}
+		return false, filekit.WrapPathErr("direxists", dirPath, err)
 	}
 
 	fullPath := a.fullPath(dirPath)
@@ -442,19 +410,11 @@ func (a *Adapter) Stat(ctx context.Context, filePath string) (*filekit.FileInfo,
 	}
 
 	if !a.isPathSafe(filePath) {
-		return nil, &filekit.PathError{
-			Op:   "stat",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.WrapPathErr("stat", filePath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return nil, &filekit.PathError{
-			Op:   "stat",
-			Path: filePath,
-			Err:  err,
-		}
+		return nil, filekit.WrapPathErr("stat", filePath, err)
 	}
 
 	fullPath := a.fullPath(filePath)
@@ -489,19 +449,11 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 	}
 
 	if !a.isPathSafe(path) {
-		return nil, &filekit.PathError{
-			Op:   "listcontents",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.WrapPathErr("listcontents", path, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return nil, &filekit.PathError{
-			Op:   "listcontents",
-			Path: path,
-			Err:  err,
-		}
+		return nil, filekit.WrapPathErr("listcontents", path, err)
 	}
 
 	fullPath := a.fullPath(path)
@@ -512,11 +464,7 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 		return nil, mapSFTPError("listcontents", path, err)
 	}
 	if !info.IsDir() {
-		return nil, &filekit.PathError{
-			Op:   "listcontents",
-			Path: path,
-			Err:  filekit.ErrNotDir,
-		}
+		return nil, filekit.WrapPathErr("listcontents", path, filekit.ErrNotDir)
 	}
 
 	var files []filekit.FileInfo
@@ -599,19 +547,11 @@ func (a *Adapter) CreateDir(ctx context.Context, dirPath string) error {
 	}
 
 	if !a.isPathSafe(dirPath) {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: dirPath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("createdir", dirPath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: dirPath,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("createdir", dirPath, err)
 	}
 
 	fullPath := a.fullPath(dirPath)
@@ -632,19 +572,11 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 	}
 
 	if !a.isPathSafe(dirPath) {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, err)
 	}
 
 	fullPath := a.fullPath(dirPath)
@@ -655,11 +587,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 		return mapSFTPError("deletedir", dirPath, err)
 	}
 	if !info.IsDir() {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: dirPath,
-			Err:  filekit.ErrNotDir,
-		}
+		return filekit.WrapPathErr("deletedir", dirPath, filekit.ErrNotDir)
 	}
 
 	// Recursively delete directory contents
@@ -736,37 +664,21 @@ func detectContentType(filePath string) string {
 // mapSFTPError maps SFTP errors to filekit errors
 func mapSFTPError(op, path string, err error) error {
 	if os.IsNotExist(err) {
-		return &filekit.PathError{
-			Op:   op,
-			Path: path,
-			Err:  filekit.ErrNotExist,
-		}
+		return filekit.WrapPathErr(op, path, filekit.ErrNotExist)
 	}
 
 	if os.IsPermission(err) {
-		return &filekit.PathError{
-			Op:   op,
-			Path: path,
-			Err:  filekit.ErrPermission,
-		}
+		return filekit.WrapPathErr(op, path, filekit.ErrPermission)
 	}
 
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
 		if os.IsNotExist(pathErr.Err) {
-			return &filekit.PathError{
-				Op:   op,
-				Path: path,
-				Err:  filekit.ErrNotExist,
-			}
+			return filekit.WrapPathErr(op, path, filekit.ErrNotExist)
 		}
 	}
 
-	return &filekit.PathError{
-		Op:   op,
-		Path: path,
-		Err:  err,
-	}
+	return filekit.WrapPathErr(op, path, err)
 }
 
 // ============================================================================
@@ -783,11 +695,11 @@ func (a *Adapter) Copy(ctx context.Context, src, dst string) error {
 	}
 
 	if !a.isPathSafe(src) || !a.isPathSafe(dst) {
-		return &filekit.PathError{Op: "copy", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("copy", src, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{Op: "copy", Path: src, Err: err}
+		return filekit.WrapPathErr("copy", src, err)
 	}
 
 	srcPath := a.fullPath(src)
@@ -830,11 +742,11 @@ func (a *Adapter) Move(ctx context.Context, src, dst string) error {
 	}
 
 	if !a.isPathSafe(src) || !a.isPathSafe(dst) {
-		return &filekit.PathError{Op: "move", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("move", src, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{Op: "move", Path: src, Err: err}
+		return filekit.WrapPathErr("move", src, err)
 	}
 
 	srcPath := a.fullPath(src)
@@ -864,7 +776,7 @@ func (a *Adapter) Checksum(ctx context.Context, filePath string, algorithm filek
 
 	checksum, err := filekit.CalculateChecksum(reader, algorithm)
 	if err != nil {
-		return "", &filekit.PathError{Op: "checksum", Path: filePath, Err: err}
+		return "", filekit.WrapPathErr("checksum", filePath, err)
 	}
 
 	return checksum, nil
@@ -880,7 +792,7 @@ func (a *Adapter) Checksums(ctx context.Context, filePath string, algorithms []f
 
 	checksums, err := filekit.CalculateChecksums(reader, algorithms)
 	if err != nil {
-		return nil, &filekit.PathError{Op: "checksums", Path: filePath, Err: err}
+		return nil, filekit.WrapPathErr("checksums", filePath, err)
 	}
 
 	return checksums, nil
@@ -926,7 +838,7 @@ type sftpFileState struct {
 // getMatchingFilesState returns the current state of files matching the filter
 func (a *Adapter) getMatchingFilesState(ctx context.Context, filter string) (map[string]sftpFileState, error) {
 	if err := a.ensureConnected(); err != nil {
-		return nil, &filekit.PathError{Op: "watch", Path: filter, Err: err}
+		return nil, filekit.WrapPathErr("watch", filter, err)
 	}
 
 	state := make(map[string]sftpFileState)
@@ -948,7 +860,7 @@ func (a *Adapter) getMatchingFilesState(ctx context.Context, filter string) (map
 	})
 
 	if err != nil {
-		return nil, &filekit.PathError{Op: "watch", Path: filter, Err: err}
+		return nil, filekit.WrapPathErr("watch", filter, err)
 	}
 
 	return state, nil
@@ -1053,40 +965,24 @@ func (a *Adapter) InitiateUpload(ctx context.Context, filePath string) (string, 
 	}
 
 	if !a.isPathSafe(filePath) {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: filePath,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return "", filekit.WrapPathErr("initiate-upload", filePath, filekit.ErrNotAllowed)
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: filePath,
-			Err:  err,
-		}
+		return "", filekit.WrapPathErr("initiate-upload", filePath, err)
 	}
 
 	// Generate a unique upload ID
 	uploadID, err := generateSFTPUploadID()
 	if err != nil {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: filePath,
-			Err:  err,
-		}
+		return "", filekit.WrapPathErr("initiate-upload", filePath, err)
 	}
 
 	// Create a temporary directory on the SFTP server for storing parts
 	// Use the base path + .filekit-uploads/ + uploadID/
 	partsDir := path.Join(a.basePath, ".filekit-uploads", uploadID)
 	if err := a.client.MkdirAll(partsDir); err != nil {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: filePath,
-			Err:  fmt.Errorf("failed to create temp directory: %w", err),
-		}
+		return "", filekit.WrapPathErr("initiate-upload", filePath, fmt.Errorf("failed to create temp directory: %w", err))
 	}
 
 	// Store upload info
@@ -1112,11 +1008,7 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 
 	// Validate part number
 	if partNumber < 1 {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("part number must be >= 1, got %d", partNumber),
-		}
+		return filekit.NewPathError("upload-part", uploadID, filekit.ErrCodeValidation, fmt.Sprintf("part number must be >= 1, got %d", partNumber))
 	}
 
 	// Get upload info
@@ -1125,39 +1017,23 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 	sftpUploadRegistry.RUnlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("upload-part", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("upload-part", uploadID, err)
 	}
 
 	// Write part to file on SFTP server
 	partPath := path.Join(info.partsDir, fmt.Sprintf("%d", partNumber))
 	partFile, err := a.client.Create(partPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("failed to create part file: %w", err),
-		}
+		return filekit.WrapPathErr("upload-part", uploadID, fmt.Errorf("failed to create part file: %w", err))
 	}
 	defer partFile.Close()
 
 	if _, err := partFile.Write(data); err != nil {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("failed to write part data: %w", err),
-		}
+		return filekit.WrapPathErr("upload-part", uploadID, fmt.Errorf("failed to write part data: %w", err))
 	}
 
 	return nil
@@ -1181,40 +1057,24 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	sftpUploadRegistry.Unlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("complete-upload", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// Ensure cleanup of parts directory
 	defer a.removeAllSFTP(info.partsDir)
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("complete-upload", uploadID, err)
 	}
 
 	// Read all part files
 	entries, err := a.client.ReadDir(info.partsDir)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("complete-upload", uploadID, err)
 	}
 
 	if len(entries) == 0 {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  errors.New("no parts uploaded"),
-		}
+		return filekit.NewPathError("complete-upload", uploadID, filekit.ErrCodeValidation, "no parts uploaded")
 	}
 
 	// Sort parts by part number
@@ -1237,21 +1097,13 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	// Ensure the directory exists
 	dir := path.Dir(fullPath)
 	if err := a.client.MkdirAll(dir); err != nil {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: info.path,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("complete-upload", info.path, err)
 	}
 
 	// Create the target file
 	targetFile, err := a.client.Create(fullPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: info.path,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("complete-upload", info.path, err)
 	}
 	defer targetFile.Close()
 
@@ -1260,21 +1112,13 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 		partPath := path.Join(info.partsDir, fmt.Sprintf("%d", partNum))
 		partFile, err := a.client.Open(partPath)
 		if err != nil {
-			return &filekit.PathError{
-				Op:   "complete-upload",
-				Path: info.path,
-				Err:  fmt.Errorf("failed to open part %d: %w", partNum, err),
-			}
+			return filekit.WrapPathErr("complete-upload", info.path, fmt.Errorf("failed to open part %d: %w", partNum, err))
 		}
 
 		_, err = io.Copy(targetFile, partFile)
 		partFile.Close()
 		if err != nil {
-			return &filekit.PathError{
-				Op:   "complete-upload",
-				Path: info.path,
-				Err:  fmt.Errorf("failed to write part %d: %w", partNum, err),
-			}
+			return filekit.WrapPathErr("complete-upload", info.path, fmt.Errorf("failed to write part %d: %w", partNum, err))
 		}
 	}
 
@@ -1298,28 +1142,16 @@ func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
 	sftpUploadRegistry.Unlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "abort-upload",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("abort-upload", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return &filekit.PathError{
-			Op:   "abort-upload",
-			Path: uploadID,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("abort-upload", uploadID, err)
 	}
 
 	// Clean up parts directory
 	if err := a.removeAllSFTP(info.partsDir); err != nil {
-		return &filekit.PathError{
-			Op:   "abort-upload",
-			Path: uploadID,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("abort-upload", uploadID, err)
 	}
 
 	return nil

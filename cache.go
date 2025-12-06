@@ -584,7 +584,7 @@ func (c *CachingFileSystem) Copy(ctx context.Context, src, dst string) error {
 		}
 		return err
 	}
-	return &PathError{Op: "copy", Path: src, Err: ErrNotSupported}
+	return NewPathError("copy", src, ErrCodeNotSupported, "underlying filesystem does not support copy")
 }
 
 // Move delegates to the underlying filesystem and invalidates cache.
@@ -597,7 +597,7 @@ func (c *CachingFileSystem) Move(ctx context.Context, src, dst string) error {
 		}
 		return err
 	}
-	return &PathError{Op: "move", Path: src, Err: ErrNotSupported}
+	return NewPathError("move", src, ErrCodeNotSupported, "underlying filesystem does not support move")
 }
 
 // Checksum delegates to the underlying filesystem.
@@ -605,7 +605,7 @@ func (c *CachingFileSystem) Checksum(ctx context.Context, path string, algorithm
 	if checksummer, ok := c.fs.(CanChecksum); ok {
 		return checksummer.Checksum(ctx, path, algorithm)
 	}
-	return "", &PathError{Op: "checksum", Path: path, Err: ErrNotSupported}
+	return "", NewPathError("checksum", path, ErrCodeNotSupported, "underlying filesystem does not support checksums")
 }
 
 // Checksums delegates to the underlying filesystem.
@@ -613,7 +613,7 @@ func (c *CachingFileSystem) Checksums(ctx context.Context, path string, algorith
 	if checksummer, ok := c.fs.(CanChecksum); ok {
 		return checksummer.Checksums(ctx, path, algorithms)
 	}
-	return nil, &PathError{Op: "checksums", Path: path, Err: ErrNotSupported}
+	return nil, NewPathError("checksums", path, ErrCodeNotSupported, "underlying filesystem does not support checksums")
 }
 
 // SignedURL delegates to the underlying filesystem.
@@ -621,7 +621,7 @@ func (c *CachingFileSystem) SignedURL(ctx context.Context, path string, expires 
 	if urlGen, ok := c.fs.(CanSignURL); ok {
 		return urlGen.SignedURL(ctx, path, expires)
 	}
-	return "", &PathError{Op: "signed-url", Path: path, Err: ErrNotSupported}
+	return "", NewPathError("signed-url", path, ErrCodeNotSupported, "underlying filesystem does not support signed URLs")
 }
 
 // SignedUploadURL delegates to the underlying filesystem.
@@ -629,7 +629,7 @@ func (c *CachingFileSystem) SignedUploadURL(ctx context.Context, path string, ex
 	if urlGen, ok := c.fs.(CanSignURL); ok {
 		return urlGen.SignedUploadURL(ctx, path, expires)
 	}
-	return "", &PathError{Op: "signed-upload-url", Path: path, Err: ErrNotSupported}
+	return "", NewPathError("signed-upload-url", path, ErrCodeNotSupported, "underlying filesystem does not support signed URLs")
 }
 
 // Watch delegates to the underlying filesystem.

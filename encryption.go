@@ -133,44 +133,27 @@ func NewEncryptedFS(fs FileSystem, key []byte, opts ...EncryptedFSOption) (*Encr
 func (e *EncryptedFS) Write(ctx context.Context, path string, content io.Reader, options ...Option) (*WriteResult, error) {
 	// Check context before starting.
 	if err := ctx.Err(); err != nil {
-		return nil, &PathError{
-			Op:   "encrypt",
-			Path: path,
-			Err:  err,
-			Code: ErrCodeCancelled,
-		}
+		return nil, WrapPath(err, "encrypt", path, ErrCodeAborted, "context canceled")
 	}
 
 	// Create cipher.
 	block, err := aes.NewCipher(e.key)
 	if err != nil {
-		return nil, &PathError{
-			Op:   "encrypt",
-			Path: path,
-			Err:  fmt.Errorf("%w: cipher creation failed: %w", ErrEncryptionFailed, err),
-			Code: ErrCodeInternal,
-		}
+		return nil, WrapPath(fmt.Errorf("%w: cipher creation failed: %w", ErrEncryptionFailed, err),
+			"encrypt", path, ErrCodeInternal, "cipher creation failed")
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, &PathError{
-			Op:   "encrypt",
-			Path: path,
-			Err:  fmt.Errorf("%w: GCM creation failed: %w", ErrEncryptionFailed, err),
-			Code: ErrCodeInternal,
-		}
+		return nil, WrapPath(fmt.Errorf("%w: GCM creation failed: %w", ErrEncryptionFailed, err),
+			"encrypt", path, ErrCodeInternal, "GCM creation failed")
 	}
 
 	// Generate base nonce.
 	baseNonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, baseNonce); err != nil {
-		return nil, &PathError{
-			Op:   "encrypt",
-			Path: path,
-			Err:  fmt.Errorf("%w: failed to generate nonce: %w", ErrEncryptionFailed, err),
-			Code: ErrCodeInternal,
-		}
+		return nil, WrapPath(fmt.Errorf("%w: failed to generate nonce: %w", ErrEncryptionFailed, err),
+			"encrypt", path, ErrCodeInternal, "nonce generation failed")
 	}
 
 	// Create pipe for streaming encrypted data.
@@ -282,12 +265,7 @@ func (e *EncryptedFS) Write(ctx context.Context, path string, content io.Reader,
 		return nil, writeErr
 	}
 	if encryptErr != nil {
-		return nil, &PathError{
-			Op:   "encrypt",
-			Path: path,
-			Err:  encryptErr,
-			Code: ErrCodeInternal,
-		}
+		return nil, WrapPath(encryptErr, "encrypt", path, ErrCodeInternal, "encryption failed")
 	}
 
 	return result, nil
@@ -297,12 +275,7 @@ func (e *EncryptedFS) Write(ctx context.Context, path string, content io.Reader,
 func (e *EncryptedFS) Read(ctx context.Context, path string) (io.ReadCloser, error) {
 	// Check context before starting.
 	if err := ctx.Err(); err != nil {
-		return nil, &PathError{
-			Op:   "decrypt",
-			Path: path,
-			Err:  err,
-			Code: ErrCodeCancelled,
-		}
+		return nil, WrapPath(err, "decrypt", path, ErrCodeAborted, "context canceled")
 	}
 
 	// Read encrypted content.
@@ -341,62 +314,35 @@ func newDecryptingReader(ctx context.Context, source io.ReadCloser, key []byte, 
 	// Create cipher.
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, &PathError{
-			Op:   "decrypt",
-			Path: path,
-			Err:  fmt.Errorf("%w: cipher creation failed: %w", ErrDecryptionFailed, err),
-			Code: ErrCodeInternal,
-		}
+		return nil, WrapPath(fmt.Errorf("%w: cipher creation failed: %w", ErrDecryptionFailed, err),
+			"decrypt", path, ErrCodeInternal, "cipher creation failed")
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, &PathError{
-			Op:   "decrypt",
-			Path: path,
-			Err:  fmt.Errorf("%w: GCM creation failed: %w", ErrDecryptionFailed, err),
-			Code: ErrCodeInternal,
-		}
+		return nil, WrapPath(fmt.Errorf("%w: GCM creation failed: %w", ErrDecryptionFailed, err),
+			"decrypt", path, ErrCodeInternal, "GCM creation failed")
 	}
 
 	// Read header (17 bytes).
 	header := make([]byte, 17)
 	if _, err := io.ReadFull(source, header); err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			return nil, &PathError{
-				Op:   "decrypt",
-				Path: path,
-				Err:  ErrTruncatedFile,
-				Code: ErrCodeDataCorrupted,
-			}
+			return nil, WrapPath(ErrTruncatedFile, "decrypt", path, ErrCodeIntegrity, "encrypted file is truncated")
 		}
-		return nil, &PathError{
-			Op:   "decrypt",
-			Path: path,
-			Err:  err,
-			Code: ErrCodeInternal,
-		}
+		return nil, WrapPath(err, "decrypt", path, ErrCodeInternal, "failed to read header")
 	}
 
 	// Parse header.
 	version := header[0]
 	if version != encryptionFormatVersion {
-		return nil, &PathError{
-			Op:   "decrypt",
-			Path: path,
-			Err:  fmt.Errorf("%w: got version %d, expected %d", ErrUnsupportedVersion, version, encryptionFormatVersion),
-			Code: ErrCodeDataCorrupted,
-		}
+		return nil, WrapPath(fmt.Errorf("%w: got version %d, expected %d", ErrUnsupportedVersion, version, encryptionFormatVersion),
+			"decrypt", path, ErrCodeIntegrity, "unsupported encryption version")
 	}
 
 	chunkSize := int(binary.BigEndian.Uint32(header[1:5]))
 	if chunkSize < 1024 || chunkSize > 16*1024*1024 {
-		return nil, &PathError{
-			Op:   "decrypt",
-			Path: path,
-			Err:  ErrInvalidChunkSize,
-			Code: ErrCodeDataCorrupted,
-		}
+		return nil, WrapPath(ErrInvalidChunkSize, "decrypt", path, ErrCodeIntegrity, "invalid chunk size")
 	}
 
 	baseNonce := make([]byte, gcm.NonceSize())
@@ -455,19 +401,9 @@ func (d *decryptingReader) decryptNextChunk() error {
 			return io.EOF
 		}
 		if errors.Is(err, io.ErrUnexpectedEOF) {
-			return &PathError{
-				Op:   "decrypt",
-				Path: d.path,
-				Err:  ErrTruncatedFile,
-				Code: ErrCodeDataCorrupted,
-			}
+			return WrapPath(ErrTruncatedFile, "decrypt", d.path, ErrCodeIntegrity, "chunk header truncated")
 		}
-		return &PathError{
-			Op:   "decrypt",
-			Path: d.path,
-			Err:  err,
-			Code: ErrCodeInternal,
-		}
+		return WrapPath(err, "decrypt", d.path, ErrCodeInternal, "failed to read chunk header")
 	}
 
 	chunkLen := int(binary.BigEndian.Uint32(chunkHeader[0:4]))
@@ -475,42 +411,24 @@ func (d *decryptingReader) decryptNextChunk() error {
 
 	// Verify chunk sequence.
 	if chunkSeq != d.chunkSeq {
-		return &PathError{
-			Op:   "decrypt",
-			Path: d.path,
-			Err:  fmt.Errorf("%w: expected %d, got %d", ErrInvalidChunkSequence, d.chunkSeq, chunkSeq),
-			Code: ErrCodeDataCorrupted,
-		}
+		return WrapPath(fmt.Errorf("%w: expected %d, got %d", ErrInvalidChunkSequence, d.chunkSeq, chunkSeq),
+			"decrypt", d.path, ErrCodeIntegrity, "invalid chunk sequence")
 	}
 
 	// Validate chunk length.
 	maxChunkLen := d.chunkSize + d.gcm.Overhead()
 	if chunkLen <= 0 || chunkLen > maxChunkLen {
-		return &PathError{
-			Op:   "decrypt",
-			Path: d.path,
-			Err:  fmt.Errorf("%w: chunk length %d exceeds maximum %d", ErrInvalidChunkSize, chunkLen, maxChunkLen),
-			Code: ErrCodeDataCorrupted,
-		}
+		return WrapPath(fmt.Errorf("%w: chunk length %d exceeds maximum %d", ErrInvalidChunkSize, chunkLen, maxChunkLen),
+			"decrypt", d.path, ErrCodeIntegrity, "invalid chunk length")
 	}
 
 	// Read encrypted chunk.
 	ciphertext := d.cipherBuf[:chunkLen]
 	if _, err := io.ReadFull(d.source, ciphertext); err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			return &PathError{
-				Op:   "decrypt",
-				Path: d.path,
-				Err:  ErrTruncatedFile,
-				Code: ErrCodeDataCorrupted,
-			}
+			return WrapPath(ErrTruncatedFile, "decrypt", d.path, ErrCodeIntegrity, "chunk data truncated")
 		}
-		return &PathError{
-			Op:   "decrypt",
-			Path: d.path,
-			Err:  err,
-			Code: ErrCodeInternal,
-		}
+		return WrapPath(err, "decrypt", d.path, ErrCodeInternal, "failed to read chunk data")
 	}
 
 	// Derive per-chunk nonce.
@@ -520,12 +438,7 @@ func (d *decryptingReader) decryptNextChunk() error {
 	// Decrypt chunk.
 	plaintext, err := d.gcm.Open(nil, d.chunkNonce, ciphertext, nil)
 	if err != nil {
-		return &PathError{
-			Op:   "decrypt",
-			Path: d.path,
-			Err:  ErrDecryptionFailed,
-			Code: ErrCodeDataCorrupted,
-		}
+		return WrapPath(ErrDecryptionFailed, "decrypt", d.path, ErrCodeIntegrity, "decryption failed")
 	}
 
 	// Store decrypted data.
@@ -597,11 +510,7 @@ func (e *EncryptedFS) DeleteDir(ctx context.Context, path string) error {
 func (e *EncryptedFS) UploadFile(ctx context.Context, path, localPath string, options ...Option) error {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return &PathError{
-			Op:   "uploadfile",
-			Path: localPath,
-			Err:  err,
-		}
+		return WrapPathErr("uploadfile", localPath, err)
 	}
 	defer file.Close()
 

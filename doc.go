@@ -137,9 +137,9 @@
 //	    // File does not exist
 //	}
 //
-//	var pathErr *filekit.PathError
-//	if errors.As(err, &pathErr) {
-//	    fmt.Printf("Operation: %s, Path: %s\n", pathErr.Op, pathErr.Path)
+//	var fileErr *filekit.FileError
+//	if errors.As(err, &fileErr) {
+//	    fmt.Printf("Code: %s, Op: %s, Path: %s\n", fileErr.Code(), fileErr.Op, fileErr.Path)
 //	}
 //
 // # Configuration

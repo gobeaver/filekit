@@ -315,10 +315,10 @@ func TestEncryptionWrongKey(t *testing.T) {
 		t.Fatal("expected decryption error with wrong key")
 	}
 
-	var pathErr *PathError
-	if errors.As(err, &pathErr) {
-		if pathErr.Code != ErrCodeDataCorrupted {
-			t.Errorf("expected ErrCodeDataCorrupted, got %v", pathErr.Code)
+	var fileErr *FileError
+	if errors.As(err, &fileErr) {
+		if fileErr.Code() != ErrCodeIntegrity {
+			t.Errorf("expected ErrCodeIntegrity, got %v", fileErr.Code())
 		}
 	}
 }
@@ -348,11 +348,13 @@ func TestEncryptionCorruptedData(t *testing.T) {
 			t.Fatal("expected error for corrupted version")
 		}
 		if !errors.Is(err, ErrUnsupportedVersion) {
-			var pathErr *PathError
-			if errors.As(err, &pathErr) {
-				if !errors.Is(pathErr.Err, ErrUnsupportedVersion) {
+			var fileErr *FileError
+			if errors.As(err, &fileErr) {
+				if !errors.Is(fileErr.Err, ErrUnsupportedVersion) {
 					t.Errorf("expected ErrUnsupportedVersion, got %v", err)
 				}
+			} else {
+				t.Errorf("expected ErrUnsupportedVersion, got %v", err)
 			}
 		}
 	})

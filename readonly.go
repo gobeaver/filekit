@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// ErrReadOnly is returned when a write operation is attempted on a read-only filesystem.
-var ErrReadOnly = errors.New("filesystem is read-only")
-
 // ============================================================================
 // ReadOnlyFileSystem Decorator
 // ============================================================================
@@ -57,7 +54,7 @@ type ReadOnlyOptions struct {
 	OnWriteAttempt func(op, path string) error
 
 	// ErrorWrapper allows customizing the error returned for write attempts.
-	// If nil, wraps with PathError containing ErrReadOnly.
+	// If nil, wraps with FileError containing ErrReadOnly.
 	// Useful for providing context-specific error messages.
 	ErrorWrapper func(op, path string, err error) error
 }
@@ -127,7 +124,7 @@ func (r *ReadOnlyFileSystem) readOnlyError(op, path string) error {
 			if r.opts.ErrorWrapper != nil {
 				return r.opts.ErrorWrapper(op, path, err)
 			}
-			return &PathError{Op: op, Path: path, Err: err}
+			return WrapPathErr(op, path, err)
 		}
 		// Handler returned nil, allow the operation
 		return nil
@@ -137,7 +134,7 @@ func (r *ReadOnlyFileSystem) readOnlyError(op, path string) error {
 	if r.opts.ErrorWrapper != nil {
 		return r.opts.ErrorWrapper(op, path, ErrReadOnly)
 	}
-	return &PathError{Op: op, Path: path, Err: ErrReadOnly}
+	return WrapPath(ErrReadOnly, op, path, ErrCodePermission, "filesystem is read-only")
 }
 
 // ============================================================================
@@ -230,7 +227,7 @@ func (r *ReadOnlyFileSystem) Copy(ctx context.Context, src, dst string) error {
 	if copier, ok := r.fs.(CanCopy); ok {
 		return copier.Copy(ctx, src, dst)
 	}
-	return &PathError{Op: "copy", Path: src, Err: ErrNotSupported}
+	return NewPathError("copy", src, ErrCodeNotSupported, "underlying filesystem does not support copy")
 }
 
 // Move returns ErrReadOnly for write operations.
@@ -242,7 +239,7 @@ func (r *ReadOnlyFileSystem) Move(ctx context.Context, src, dst string) error {
 	if mover, ok := r.fs.(CanMove); ok {
 		return mover.Move(ctx, src, dst)
 	}
-	return &PathError{Op: "move", Path: src, Err: ErrNotSupported}
+	return NewPathError("move", src, ErrCodeNotSupported, "underlying filesystem does not support move")
 }
 
 // Move also handles rename operations - returns ErrReadOnly for write operations.
@@ -253,7 +250,7 @@ func (r *ReadOnlyFileSystem) Checksum(ctx context.Context, path string, algorith
 	if checksummer, ok := r.fs.(CanChecksum); ok {
 		return checksummer.Checksum(ctx, path, algorithm)
 	}
-	return "", &PathError{Op: "checksum", Path: path, Err: ErrNotSupported}
+	return "", NewPathError("checksum", path, ErrCodeNotSupported, "underlying filesystem does not support checksums")
 }
 
 // Checksums delegates to the underlying filesystem if supported.
@@ -261,7 +258,7 @@ func (r *ReadOnlyFileSystem) Checksums(ctx context.Context, path string, algorit
 	if checksummer, ok := r.fs.(CanChecksum); ok {
 		return checksummer.Checksums(ctx, path, algorithms)
 	}
-	return nil, &PathError{Op: "checksums", Path: path, Err: ErrNotSupported}
+	return nil, NewPathError("checksums", path, ErrCodeNotSupported, "underlying filesystem does not support checksums")
 }
 
 // SignedURL delegates to the underlying filesystem if supported.
@@ -269,7 +266,7 @@ func (r *ReadOnlyFileSystem) SignedURL(ctx context.Context, path string, expires
 	if urlGen, ok := r.fs.(CanSignURL); ok {
 		return urlGen.SignedURL(ctx, path, expires)
 	}
-	return "", &PathError{Op: "signed-url", Path: path, Err: ErrNotSupported}
+	return "", NewPathError("signed-url", path, ErrCodeNotSupported, "underlying filesystem does not support signed URLs")
 }
 
 // SignedUploadURL returns ErrReadOnly (upload URLs enable writes).
@@ -281,7 +278,7 @@ func (r *ReadOnlyFileSystem) SignedUploadURL(ctx context.Context, path string, e
 	if urlGen, ok := r.fs.(CanSignURL); ok {
 		return urlGen.SignedUploadURL(ctx, path, expires)
 	}
-	return "", &PathError{Op: "signed-upload-url", Path: path, Err: ErrNotSupported}
+	return "", NewPathError("signed-upload-url", path, ErrCodeNotSupported, "underlying filesystem does not support signed URLs")
 }
 
 // Watch delegates to the underlying filesystem if supported.

@@ -55,19 +55,19 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return nil, filekit.NewPathError("write", path, filekit.ErrNotAllowed)
+		return nil, filekit.WrapPathErr("write", path, filekit.ErrNotAllowed)
 	}
 
 	// Ensure the directory exists
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, filekit.NewPathError("write", path, err)
+		return nil, filekit.WrapPathErr("write", path, err)
 	}
 
 	// Create the file
 	f, err := os.Create(fullPath)
 	if err != nil {
-		return nil, filekit.NewPathError("write", path, err)
+		return nil, filekit.WrapPathErr("write", path, err)
 	}
 	defer f.Close()
 
@@ -75,7 +75,7 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	hash := sha256.New()
 	written, err := io.Copy(io.MultiWriter(f, hash), content)
 	if err != nil {
-		return nil, filekit.NewPathError("write", path, err)
+		return nil, filekit.WrapPathErr("write", path, err)
 	}
 
 	// Apply file options (permissions, etc.) if needed
@@ -84,18 +84,18 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	// Set file permissions based on visibility
 	if opts.Visibility == filekit.Public {
 		if err := os.Chmod(fullPath, 0644); err != nil {
-			return nil, filekit.NewPathError("write", path, err)
+			return nil, filekit.WrapPathErr("write", path, err)
 		}
 	} else if opts.Visibility == filekit.Private {
 		if err := os.Chmod(fullPath, 0600); err != nil {
-			return nil, filekit.NewPathError("write", path, err)
+			return nil, filekit.WrapPathErr("write", path, err)
 		}
 	}
 
 	// Get file info for timestamp
 	stat, err := f.Stat()
 	if err != nil {
-		return nil, filekit.NewPathError("write", path, err)
+		return nil, filekit.WrapPathErr("write", path, err)
 	}
 
 	return &filekit.WriteResult{
@@ -119,28 +119,16 @@ func (a *Adapter) Read(ctx context.Context, path string) (io.ReadCloser, error) 
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return nil, &filekit.PathError{
-			Op:   "read",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.WrapPathErr("read", path, filekit.ErrNotAllowed)
 	}
 
 	// Open the file
 	f, err := os.Open(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, &filekit.PathError{
-				Op:   "read",
-				Path: path,
-				Err:  filekit.ErrNotExist,
-			}
+			return nil, filekit.WrapPathErr("read", path, filekit.ErrNotExist)
 		}
-		return nil, &filekit.PathError{
-			Op:   "read",
-			Path: path,
-			Err:  err,
-		}
+		return nil, filekit.WrapPathErr("read", path, err)
 	}
 
 	return f, nil
@@ -170,28 +158,16 @@ func (a *Adapter) Delete(ctx context.Context, path string) error {
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return &filekit.PathError{
-			Op:   "delete",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("delete", path, filekit.ErrNotAllowed)
 	}
 
 	// Delete the file
 	err := os.Remove(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &filekit.PathError{
-				Op:   "delete",
-				Path: path,
-				Err:  filekit.ErrNotExist,
-			}
+			return filekit.WrapPathErr("delete", path, filekit.ErrNotExist)
 		}
-		return &filekit.PathError{
-			Op:   "delete",
-			Path: path,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("delete", path, err)
 	}
 
 	return nil
@@ -210,11 +186,7 @@ func (a *Adapter) FileExists(ctx context.Context, path string) (bool, error) {
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return false, &filekit.PathError{
-			Op:   "fileexists",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return false, filekit.WrapPathErr("fileexists", path, filekit.ErrNotAllowed)
 	}
 
 	info, err := os.Stat(fullPath)
@@ -222,11 +194,7 @@ func (a *Adapter) FileExists(ctx context.Context, path string) (bool, error) {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, &filekit.PathError{
-			Op:   "fileexists",
-			Path: path,
-			Err:  err,
-		}
+		return false, filekit.WrapPathErr("fileexists", path, err)
 	}
 
 	// Return true only if it's a file (not a directory)
@@ -246,11 +214,7 @@ func (a *Adapter) DirExists(ctx context.Context, path string) (bool, error) {
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return false, &filekit.PathError{
-			Op:   "direxists",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return false, filekit.WrapPathErr("direxists", path, filekit.ErrNotAllowed)
 	}
 
 	info, err := os.Stat(fullPath)
@@ -258,11 +222,7 @@ func (a *Adapter) DirExists(ctx context.Context, path string) (bool, error) {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, &filekit.PathError{
-			Op:   "direxists",
-			Path: path,
-			Err:  err,
-		}
+		return false, filekit.WrapPathErr("direxists", path, err)
 	}
 
 	// Return true only if it's a directory
@@ -282,27 +242,15 @@ func (a *Adapter) Stat(ctx context.Context, path string) (*filekit.FileInfo, err
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return nil, &filekit.PathError{
-			Op:   "stat",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.WrapPathErr("stat", path, filekit.ErrNotAllowed)
 	}
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, &filekit.PathError{
-				Op:   "stat",
-				Path: path,
-				Err:  filekit.ErrNotExist,
-			}
+			return nil, filekit.WrapPathErr("stat", path, filekit.ErrNotExist)
 		}
-		return nil, &filekit.PathError{
-			Op:   "stat",
-			Path: path,
-			Err:  err,
-		}
+		return nil, filekit.WrapPathErr("stat", path, err)
 	}
 
 	// Get content type
@@ -334,37 +282,21 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return nil, &filekit.PathError{
-			Op:   "listcontents",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return nil, filekit.WrapPathErr("listcontents", path, filekit.ErrNotAllowed)
 	}
 
 	// Check if the directory exists
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, &filekit.PathError{
-				Op:   "listcontents",
-				Path: path,
-				Err:  filekit.ErrNotExist,
-			}
+			return nil, filekit.WrapPathErr("listcontents", path, filekit.ErrNotExist)
 		}
-		return nil, &filekit.PathError{
-			Op:   "listcontents",
-			Path: path,
-			Err:  err,
-		}
+		return nil, filekit.WrapPathErr("listcontents", path, err)
 	}
 
 	// If it's not a directory, return an error
 	if !info.IsDir() {
-		return nil, &filekit.PathError{
-			Op:   "listcontents",
-			Path: path,
-			Err:  filekit.ErrNotDir,
-		}
+		return nil, filekit.WrapPathErr("listcontents", path, filekit.ErrNotDir)
 	}
 
 	var files []filekit.FileInfo
@@ -410,21 +342,13 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 			return nil
 		})
 		if err != nil {
-			return nil, &filekit.PathError{
-				Op:   "listcontents",
-				Path: path,
-				Err:  err,
-			}
+			return nil, filekit.WrapPathErr("listcontents", path, err)
 		}
 	} else {
 		// Read only the immediate directory contents
 		entries, err := os.ReadDir(fullPath)
 		if err != nil {
-			return nil, &filekit.PathError{
-				Op:   "listcontents",
-				Path: path,
-				Err:  err,
-			}
+			return nil, filekit.WrapPathErr("listcontents", path, err)
 		}
 
 		files = make([]filekit.FileInfo, 0, len(entries))
@@ -467,20 +391,12 @@ func (a *Adapter) CreateDir(ctx context.Context, path string) error {
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("createdir", path, filekit.ErrNotAllowed)
 	}
 
 	// Create the directory
 	if err := os.MkdirAll(fullPath, 0755); err != nil {
-		return &filekit.PathError{
-			Op:   "createdir",
-			Path: path,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("createdir", path, err)
 	}
 
 	return nil
@@ -499,46 +415,26 @@ func (a *Adapter) DeleteDir(ctx context.Context, path string) error {
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return filekit.WrapPathErr("deletedir", path, filekit.ErrNotAllowed)
 	}
 
 	// Check if the directory exists
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &filekit.PathError{
-				Op:   "deletedir",
-				Path: path,
-				Err:  filekit.ErrNotExist,
-			}
+			return filekit.WrapPathErr("deletedir", path, filekit.ErrNotExist)
 		}
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: path,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("deletedir", path, err)
 	}
 
 	// Check if it's a directory
 	if !info.IsDir() {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: path,
-			Err:  filekit.ErrNotDir,
-		}
+		return filekit.WrapPathErr("deletedir", path, filekit.ErrNotDir)
 	}
 
 	// Delete the directory
 	if err := os.RemoveAll(fullPath); err != nil {
-		return &filekit.PathError{
-			Op:   "deletedir",
-			Path: path,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("deletedir", path, err)
 	}
 
 	return nil
@@ -549,7 +445,7 @@ func (a *Adapter) WriteFile(ctx context.Context, path string, localPath string, 
 	// Open the local file
 	file, err := os.Open(localPath)
 	if err != nil {
-		return nil, filekit.NewPathError("writefile", localPath, err)
+		return nil, filekit.WrapPathErr("writefile", localPath, err)
 	}
 	defer file.Close()
 
@@ -620,37 +516,37 @@ func (a *Adapter) Copy(ctx context.Context, src, dst string) error {
 
 	// Check paths are under root
 	if !isPathUnderRoot(a.root, srcPath) {
-		return &filekit.PathError{Op: "copy", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("copy", src, filekit.ErrNotAllowed)
 	}
 	if !isPathUnderRoot(a.root, dstPath) {
-		return &filekit.PathError{Op: "copy", Path: dst, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("copy", dst, filekit.ErrNotAllowed)
 	}
 
 	// Open source file
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &filekit.PathError{Op: "copy", Path: src, Err: filekit.ErrNotExist}
+			return filekit.WrapPathErr("copy", src, filekit.ErrNotExist)
 		}
-		return &filekit.PathError{Op: "copy", Path: src, Err: err}
+		return filekit.WrapPathErr("copy", src, err)
 	}
 	defer srcFile.Close()
 
 	// Create destination directory if needed
 	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
-		return &filekit.PathError{Op: "copy", Path: dst, Err: err}
+		return filekit.WrapPathErr("copy", dst, err)
 	}
 
 	// Create destination file
 	dstFile, err := os.Create(dstPath)
 	if err != nil {
-		return &filekit.PathError{Op: "copy", Path: dst, Err: err}
+		return filekit.WrapPathErr("copy", dst, err)
 	}
 	defer dstFile.Close()
 
 	// Copy content
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
-		return &filekit.PathError{Op: "copy", Path: dst, Err: err}
+		return filekit.WrapPathErr("copy", dst, err)
 	}
 
 	// Copy file permissions
@@ -675,23 +571,23 @@ func (a *Adapter) Move(ctx context.Context, src, dst string) error {
 
 	// Check paths are under root
 	if !isPathUnderRoot(a.root, srcPath) {
-		return &filekit.PathError{Op: "move", Path: src, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("move", src, filekit.ErrNotAllowed)
 	}
 	if !isPathUnderRoot(a.root, dstPath) {
-		return &filekit.PathError{Op: "move", Path: dst, Err: filekit.ErrNotAllowed}
+		return filekit.WrapPathErr("move", dst, filekit.ErrNotAllowed)
 	}
 
 	// Check source exists
 	if _, err := os.Stat(srcPath); err != nil {
 		if os.IsNotExist(err) {
-			return &filekit.PathError{Op: "move", Path: src, Err: filekit.ErrNotExist}
+			return filekit.WrapPathErr("move", src, filekit.ErrNotExist)
 		}
-		return &filekit.PathError{Op: "move", Path: src, Err: err}
+		return filekit.WrapPathErr("move", src, err)
 	}
 
 	// Create destination directory if needed
 	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
-		return &filekit.PathError{Op: "move", Path: dst, Err: err}
+		return filekit.WrapPathErr("move", dst, err)
 	}
 
 	// Try rename first (works if same filesystem)
@@ -701,7 +597,7 @@ func (a *Adapter) Move(ctx context.Context, src, dst string) error {
 			return err
 		}
 		if err := os.Remove(srcPath); err != nil {
-			return &filekit.PathError{Op: "move", Path: src, Err: err}
+			return filekit.WrapPathErr("move", src, err)
 		}
 	}
 
@@ -720,21 +616,21 @@ func (a *Adapter) Checksum(ctx context.Context, path string, algorithm filekit.C
 	fullPath := filepath.Join(a.root, filepath.Clean(path))
 
 	if !isPathUnderRoot(a.root, fullPath) {
-		return "", &filekit.PathError{Op: "checksum", Path: path, Err: filekit.ErrNotAllowed}
+		return "", filekit.WrapPathErr("checksum", path, filekit.ErrNotAllowed)
 	}
 
 	file, err := os.Open(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", &filekit.PathError{Op: "checksum", Path: path, Err: filekit.ErrNotExist}
+			return "", filekit.WrapPathErr("checksum", path, filekit.ErrNotExist)
 		}
-		return "", &filekit.PathError{Op: "checksum", Path: path, Err: err}
+		return "", filekit.WrapPathErr("checksum", path, err)
 	}
 	defer file.Close()
 
 	checksum, err := filekit.CalculateChecksum(file, algorithm)
 	if err != nil {
-		return "", &filekit.PathError{Op: "checksum", Path: path, Err: err}
+		return "", filekit.WrapPathErr("checksum", path, err)
 	}
 
 	return checksum, nil
@@ -751,21 +647,21 @@ func (a *Adapter) Checksums(ctx context.Context, path string, algorithms []filek
 	fullPath := filepath.Join(a.root, filepath.Clean(path))
 
 	if !isPathUnderRoot(a.root, fullPath) {
-		return nil, &filekit.PathError{Op: "checksums", Path: path, Err: filekit.ErrNotAllowed}
+		return nil, filekit.WrapPathErr("checksums", path, filekit.ErrNotAllowed)
 	}
 
 	file, err := os.Open(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, &filekit.PathError{Op: "checksums", Path: path, Err: filekit.ErrNotExist}
+			return nil, filekit.WrapPathErr("checksums", path, filekit.ErrNotExist)
 		}
-		return nil, &filekit.PathError{Op: "checksums", Path: path, Err: err}
+		return nil, filekit.WrapPathErr("checksums", path, err)
 	}
 	defer file.Close()
 
 	checksums, err := filekit.CalculateChecksums(file, algorithms)
 	if err != nil {
-		return nil, &filekit.PathError{Op: "checksums", Path: path, Err: err}
+		return nil, filekit.WrapPathErr("checksums", path, err)
 	}
 
 	return checksums, nil
@@ -801,13 +697,13 @@ func (a *Adapter) Watch(ctx context.Context, filter string) (filekit.ChangeToken
 	// Create fsnotify watcher
 	watcher, err := newFSWatcher()
 	if err != nil {
-		return nil, &filekit.PathError{Op: "watch", Path: filter, Err: err}
+		return nil, filekit.WrapPathErr("watch", filter, err)
 	}
 
 	// Add the watch path
 	if err := watcher.Add(watchPath); err != nil {
 		watcher.Close()
-		return nil, &filekit.PathError{Op: "watch", Path: filter, Err: err}
+		return nil, filekit.WrapPathErr("watch", filter, err)
 	}
 
 	// For recursive patterns (**), add all subdirectories
@@ -943,31 +839,19 @@ func (a *Adapter) InitiateUpload(ctx context.Context, path string) (string, erro
 
 	// Check if the path is under the root
 	if !isPathUnderRoot(a.root, fullPath) {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: path,
-			Err:  filekit.ErrNotAllowed,
-		}
+		return "", filekit.WrapPathErr("initiate-upload", path, filekit.ErrNotAllowed)
 	}
 
 	// Generate a unique upload ID
 	uploadID, err := generateUploadID()
 	if err != nil {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: path,
-			Err:  err,
-		}
+		return "", filekit.WrapPathErr("initiate-upload", path, err)
 	}
 
 	// Create a temporary directory for storing parts
 	partsDir, err := os.MkdirTemp("", fmt.Sprintf("filekit-upload-%s-", uploadID))
 	if err != nil {
-		return "", &filekit.PathError{
-			Op:   "initiate-upload",
-			Path: path,
-			Err:  err,
-		}
+		return "", filekit.WrapPathErr("initiate-upload", path, err)
 	}
 
 	// Store upload info
@@ -992,11 +876,7 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 
 	// Validate part number
 	if partNumber < 1 {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("part number must be >= 1, got %d", partNumber),
-		}
+		return filekit.NewPathError("upload-part", uploadID, filekit.ErrCodeValidation, fmt.Sprintf("part number must be >= 1, got %d", partNumber))
 	}
 
 	// Get upload info
@@ -1005,21 +885,13 @@ func (a *Adapter) UploadPart(ctx context.Context, uploadID string, partNumber in
 	uploadRegistry.RUnlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("upload-part", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// Write part to file
 	partPath := filepath.Join(info.partsDir, fmt.Sprintf("%d", partNumber))
 	if err := os.WriteFile(partPath, data, 0600); err != nil {
-		return &filekit.PathError{
-			Op:   "upload-part",
-			Path: uploadID,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("upload-part", uploadID, err)
 	}
 
 	return nil
@@ -1043,11 +915,7 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	uploadRegistry.Unlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("complete-upload", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// Ensure cleanup of parts directory
@@ -1056,19 +924,11 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	// Read all part files
 	entries, err := os.ReadDir(info.partsDir)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("complete-upload", uploadID, err)
 	}
 
 	if len(entries) == 0 {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: uploadID,
-			Err:  errors.New("no parts uploaded"),
-		}
+		return filekit.NewPathError("complete-upload", uploadID, filekit.ErrCodeValidation, "no parts uploaded")
 	}
 
 	// Sort parts by part number
@@ -1091,21 +951,13 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 	// Ensure the directory exists
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: info.path,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("complete-upload", info.path, err)
 	}
 
 	// Create the target file
 	targetFile, err := os.Create(fullPath)
 	if err != nil {
-		return &filekit.PathError{
-			Op:   "complete-upload",
-			Path: info.path,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("complete-upload", info.path, err)
 	}
 	defer targetFile.Close()
 
@@ -1114,21 +966,13 @@ func (a *Adapter) CompleteUpload(ctx context.Context, uploadID string) error {
 		partPath := filepath.Join(info.partsDir, fmt.Sprintf("%d", partNum))
 		partFile, err := os.Open(partPath)
 		if err != nil {
-			return &filekit.PathError{
-				Op:   "complete-upload",
-				Path: info.path,
-				Err:  fmt.Errorf("failed to open part %d: %w", partNum, err),
-			}
+			return filekit.WrapPathErr("complete-upload", info.path, fmt.Errorf("failed to open part %d: %w", partNum, err))
 		}
 
 		_, err = io.Copy(targetFile, partFile)
 		partFile.Close()
 		if err != nil {
-			return &filekit.PathError{
-				Op:   "complete-upload",
-				Path: info.path,
-				Err:  fmt.Errorf("failed to write part %d: %w", partNum, err),
-			}
+			return filekit.WrapPathErr("complete-upload", info.path, fmt.Errorf("failed to write part %d: %w", partNum, err))
 		}
 	}
 
@@ -1152,20 +996,12 @@ func (a *Adapter) AbortUpload(ctx context.Context, uploadID string) error {
 	uploadRegistry.Unlock()
 
 	if !ok {
-		return &filekit.PathError{
-			Op:   "abort-upload",
-			Path: uploadID,
-			Err:  fmt.Errorf("upload not found: %s", uploadID),
-		}
+		return filekit.NewPathError("abort-upload", uploadID, filekit.ErrCodeNotFound, fmt.Sprintf("upload not found: %s", uploadID))
 	}
 
 	// Clean up parts directory
 	if err := os.RemoveAll(info.partsDir); err != nil {
-		return &filekit.PathError{
-			Op:   "abort-upload",
-			Path: uploadID,
-			Err:  err,
-		}
+		return filekit.WrapPathErr("abort-upload", uploadID, err)
 	}
 
 	return nil
@@ -1180,21 +1016,21 @@ func (a *Adapter) ReadRange(ctx context.Context, path string, offset, length int
 	}
 
 	if length < 0 {
-		return nil, filekit.NewPathError("read_range", path, filekit.ErrInvalidOffset)
+		return nil, filekit.WrapPathErr("read_range", path, filekit.ErrInvalidOffset)
 	}
 
 	fullPath := filepath.Join(a.root, filepath.Clean(path))
 
 	if !isPathUnderRoot(a.root, fullPath) {
-		return nil, filekit.NewPathError("read_range", path, filekit.ErrNotAllowed)
+		return nil, filekit.WrapPathErr("read_range", path, filekit.ErrNotAllowed)
 	}
 
 	file, err := os.Open(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, filekit.NewPathError("read_range", path, filekit.ErrNotExist)
+			return nil, filekit.WrapPathErr("read_range", path, filekit.ErrNotExist)
 		}
-		return nil, filekit.NewPathError("read_range", path, err)
+		return nil, filekit.WrapPathErr("read_range", path, err)
 	}
 
 	// Handle negative offset (from end)
@@ -1202,7 +1038,7 @@ func (a *Adapter) ReadRange(ctx context.Context, path string, offset, length int
 		stat, err := file.Stat()
 		if err != nil {
 			file.Close()
-			return nil, filekit.NewPathError("read_range", path, err)
+			return nil, filekit.WrapPathErr("read_range", path, err)
 		}
 		offset = stat.Size() + offset
 		if offset < 0 {
@@ -1214,7 +1050,7 @@ func (a *Adapter) ReadRange(ctx context.Context, path string, offset, length int
 	_, err = file.Seek(offset, io.SeekStart)
 	if err != nil {
 		file.Close()
-		return nil, filekit.NewPathError("read_range", path, err)
+		return nil, filekit.WrapPathErr("read_range", path, err)
 	}
 
 	// If length specified, wrap in LimitReader
