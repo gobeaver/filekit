@@ -177,6 +177,24 @@ type FileSystem interface {
 }
 
 // ============================================================================
+// Helper Functions (Aliases)
+// ============================================================================
+
+// GetFileInfo is an alias for Stat that provides a more descriptive name.
+// It returns file or directory metadata for the given path.
+//
+// Example:
+//
+//	info, err := filekit.GetFileInfo(ctx, fs, "path/to/file.txt")
+//	if err != nil {
+//	    return err
+//	}
+//	fmt.Printf("Size: %d, Modified: %s\n", info.Size, info.ModTime)
+func GetFileInfo(ctx context.Context, fs FileReader, path string) (*FileInfo, error) {
+	return fs.Stat(ctx, path)
+}
+
+// ============================================================================
 // Optional Capability Interfaces
 // ============================================================================
 // These interfaces allow drivers to expose optional capabilities.
@@ -216,6 +234,8 @@ const (
 	ChecksumSHA512 ChecksumAlgorithm = "sha512"
 	// ChecksumCRC32 is the CRC32 checksum (32-bit, fastest, for integrity only)
 	ChecksumCRC32 ChecksumAlgorithm = "crc32"
+	// ChecksumCRC32C is the CRC32C (Castagnoli) checksum used by cloud providers (S3, GCS)
+	ChecksumCRC32C ChecksumAlgorithm = "crc32c"
 	// ChecksumXXHash is the xxHash algorithm (64-bit, extremely fast)
 	ChecksumXXHash ChecksumAlgorithm = "xxhash"
 )

@@ -23,6 +23,7 @@ type memoryFile struct {
 	content     []byte
 	contentType string
 	metadata    map[string]string
+	createdAt   time.Time
 	modTime     time.Time
 	visibility  filekit.Visibility
 }
@@ -105,10 +106,13 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 	defer a.mu.Unlock()
 
 	// Check if file exists and overwrite is not allowed
+	var existingCreatedAt time.Time
 	if existing, exists := a.files[path]; exists {
 		if !opts.Overwrite {
 			return nil, filekit.WrapPathErr("write", path, filekit.ErrExist)
 		}
+		// Preserve original creation time
+		existingCreatedAt = existing.createdAt
 		// Subtract old file size
 		a.size -= int64(len(existing.content))
 	}
@@ -134,11 +138,18 @@ func (a *Adapter) Write(ctx context.Context, path string, content io.Reader, opt
 
 	now := time.Now()
 
+	// Set createdAt - preserve if overwriting, otherwise use current time
+	createdAt := existingCreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+
 	// Store the file
 	a.files[path] = &memoryFile{
 		content:     data,
 		contentType: contentType,
 		metadata:    opts.Metadata,
+		createdAt:   createdAt,
 		modTime:     now,
 		visibility:  opts.Visibility,
 	}
@@ -265,6 +276,10 @@ func (a *Adapter) Stat(ctx context.Context, path string) (*filekit.FileInfo, err
 
 	// Check if it's a file
 	if file, exists := a.files[path]; exists {
+		var createdAt *time.Time
+		if !file.createdAt.IsZero() {
+			createdAt = &file.createdAt
+		}
 		return &filekit.FileInfo{
 			Name:        filepath.Base(path),
 			Path:        path,
@@ -273,6 +288,7 @@ func (a *Adapter) Stat(ctx context.Context, path string) (*filekit.FileInfo, err
 			IsDir:       false,
 			ContentType: file.contentType,
 			Metadata:    file.metadata,
+			CreatedAt:   createdAt,
 		}, nil
 	}
 
@@ -327,6 +343,10 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 		// List files
 		for filePath, file := range a.files {
 			if isRoot || strings.HasPrefix(filePath, prefixWithSlash) {
+				var createdAt *time.Time
+				if !file.createdAt.IsZero() {
+					createdAt = &file.createdAt
+				}
 				files = append(files, filekit.FileInfo{
 					Name:        filepath.Base(filePath),
 					Path:        filePath,
@@ -335,6 +355,7 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 					IsDir:       false,
 					ContentType: file.contentType,
 					Metadata:    file.metadata,
+					CreatedAt:   createdAt,
 				})
 			}
 		}
@@ -393,6 +414,11 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 			seen[childName] = true
 			childPath := filepath.Join(path, childName)
 
+			var createdAt *time.Time
+			if !file.createdAt.IsZero() {
+				createdAt = &file.createdAt
+			}
+
 			files = append(files, filekit.FileInfo{
 				Name:        childName,
 				Path:        childPath,
@@ -401,6 +427,7 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 				IsDir:       false,
 				ContentType: file.contentType,
 				Metadata:    file.metadata,
+				CreatedAt:   createdAt,
 			})
 		}
 
@@ -687,6 +714,7 @@ func (a *Adapter) Copy(ctx context.Context, src, dst string) error {
 	a.files[dst] = &memoryFile{
 		content:     content,
 		contentType: srcFile.contentType,
+		createdAt:   time.Now(),
 		modTime:     time.Now(),
 		metadata:    metadata,
 	}

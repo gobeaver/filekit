@@ -430,6 +430,16 @@ func (a *Adapter) Stat(ctx context.Context, filePath string) (*filekit.FileInfo,
 		contentType = detectContentType(filePath)
 	}
 
+	// Extract owner information from SFTP FileStat
+	var owner *filekit.FileOwner
+	if sys := info.Sys(); sys != nil {
+		if fileStat, ok := sys.(*sftp.FileStat); ok {
+			owner = &filekit.FileOwner{
+				ID: strconv.FormatUint(uint64(fileStat.UID), 10),
+			}
+		}
+	}
+
 	return &filekit.FileInfo{
 		Name:        filepath.Base(filePath),
 		Path:        filePath,
@@ -437,6 +447,7 @@ func (a *Adapter) Stat(ctx context.Context, filePath string) (*filekit.FileInfo,
 		ModTime:     info.ModTime(),
 		IsDir:       info.IsDir(),
 		ContentType: contentType,
+		Owner:       owner,
 	}, nil
 }
 
@@ -489,6 +500,16 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 				contentType = detectContentType(entry.Name())
 			}
 
+			// Extract owner information from SFTP FileStat
+			var owner *filekit.FileOwner
+			if sys := entry.Sys(); sys != nil {
+				if fileStat, ok := sys.(*sftp.FileStat); ok {
+					owner = &filekit.FileOwner{
+						ID: strconv.FormatUint(uint64(fileStat.UID), 10),
+					}
+				}
+			}
+
 			files = append(files, filekit.FileInfo{
 				Name:        entry.Name(),
 				Path:        filepath.Join(path, entry.Name()),
@@ -496,6 +517,7 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 				ModTime:     entry.ModTime(),
 				IsDir:       entry.IsDir(),
 				ContentType: contentType,
+				Owner:       owner,
 			})
 		}
 	}
@@ -519,6 +541,16 @@ func (a *Adapter) listRecursive(fullPath, relPath string, results *[]filekit.Fil
 			contentType = detectContentType(entry.Name())
 		}
 
+		// Extract owner information from SFTP FileStat
+		var owner *filekit.FileOwner
+		if sys := entry.Sys(); sys != nil {
+			if fileStat, ok := sys.(*sftp.FileStat); ok {
+				owner = &filekit.FileOwner{
+					ID: strconv.FormatUint(uint64(fileStat.UID), 10),
+				}
+			}
+		}
+
 		*results = append(*results, filekit.FileInfo{
 			Name:        entry.Name(),
 			Path:        entryRelPath,
@@ -526,6 +558,7 @@ func (a *Adapter) listRecursive(fullPath, relPath string, results *[]filekit.Fil
 			ModTime:     entry.ModTime(),
 			IsDir:       entry.IsDir(),
 			ContentType: contentType,
+			Owner:       owner,
 		})
 
 		if entry.IsDir() {

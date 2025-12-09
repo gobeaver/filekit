@@ -291,14 +291,36 @@ func (a *Adapter) Stat(ctx context.Context, filePath string) (*filekit.FileInfo,
 	// Determine if it's a directory
 	isDir := strings.HasSuffix(key, "/")
 
+	// Determine checksum - prefer SHA256, fall back to others
+	var checksum string
+	var checksumAlgorithm filekit.ChecksumAlgorithm
+	if resp.ChecksumSHA256 != nil {
+		checksum = aws.ToString(resp.ChecksumSHA256)
+		checksumAlgorithm = filekit.ChecksumSHA256
+	} else if resp.ChecksumSHA1 != nil {
+		checksum = aws.ToString(resp.ChecksumSHA1)
+		checksumAlgorithm = filekit.ChecksumSHA1
+	} else if resp.ChecksumCRC32 != nil {
+		checksum = aws.ToString(resp.ChecksumCRC32)
+		checksumAlgorithm = filekit.ChecksumCRC32
+	} else if resp.ChecksumCRC32C != nil {
+		checksum = aws.ToString(resp.ChecksumCRC32C)
+		checksumAlgorithm = filekit.ChecksumCRC32C
+	}
+
 	return &filekit.FileInfo{
-		Name:        filepath.Base(filePath),
-		Path:        filePath,
-		Size:        *resp.ContentLength,
-		ModTime:     aws.ToTime(resp.LastModified),
-		IsDir:       isDir,
-		ContentType: aws.ToString(resp.ContentType),
-		Metadata:    metadata,
+		Name:              filepath.Base(filePath),
+		Path:              filePath,
+		Size:              aws.ToInt64(resp.ContentLength),
+		ModTime:           aws.ToTime(resp.LastModified),
+		IsDir:             isDir,
+		ContentType:       aws.ToString(resp.ContentType),
+		Metadata:          metadata,
+		ETag:              aws.ToString(resp.ETag),
+		Version:           aws.ToString(resp.VersionId),
+		StorageClass:      string(resp.StorageClass),
+		Checksum:          checksum,
+		ChecksumAlgorithm: checksumAlgorithm,
 	}, nil
 }
 
@@ -339,11 +361,13 @@ func (a *Adapter) ListContents(ctx context.Context, prefix string, recursive boo
 				isDir := strings.HasSuffix(aws.ToString(obj.Key), "/")
 
 				files = append(files, filekit.FileInfo{
-					Name:    filepath.Base(relPath),
-					Path:    relPath,
-					Size:    aws.ToInt64(obj.Size),
-					ModTime: aws.ToTime(obj.LastModified),
-					IsDir:   isDir,
+					Name:         filepath.Base(relPath),
+					Path:         relPath,
+					Size:         aws.ToInt64(obj.Size),
+					ModTime:      aws.ToTime(obj.LastModified),
+					IsDir:        isDir,
+					ETag:         aws.ToString(obj.ETag),
+					StorageClass: string(obj.StorageClass),
 				})
 			}
 		}
@@ -386,11 +410,13 @@ func (a *Adapter) ListContents(ctx context.Context, prefix string, recursive boo
 			}
 
 			files = append(files, filekit.FileInfo{
-				Name:    fileName,
-				Path:    path.Join(prefix, fileName),
-				Size:    aws.ToInt64(obj.Size),
-				ModTime: aws.ToTime(obj.LastModified),
-				IsDir:   false,
+				Name:         fileName,
+				Path:         path.Join(prefix, fileName),
+				Size:         aws.ToInt64(obj.Size),
+				ModTime:      aws.ToTime(obj.LastModified),
+				IsDir:        false,
+				ETag:         aws.ToString(obj.ETag),
+				StorageClass: string(obj.StorageClass),
 			})
 		}
 	}

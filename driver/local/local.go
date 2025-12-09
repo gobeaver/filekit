@@ -259,6 +259,9 @@ func (a *Adapter) Stat(ctx context.Context, path string) (*filekit.FileInfo, err
 		contentType = getContentType(fullPath)
 	}
 
+	// Extract platform-specific information (Owner, CreatedAt)
+	owner, createdAt := extractPlatformInfo(info)
+
 	return &filekit.FileInfo{
 		Name:        filepath.Base(path),
 		Path:        path,
@@ -266,6 +269,8 @@ func (a *Adapter) Stat(ctx context.Context, path string) (*filekit.FileInfo, err
 		ModTime:     info.ModTime(),
 		IsDir:       info.IsDir(),
 		ContentType: contentType,
+		Owner:       owner,
+		CreatedAt:   createdAt,
 	}, nil
 }
 
@@ -330,6 +335,9 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 				contentType = getContentType(walkPath)
 			}
 
+			// Extract platform-specific information
+			owner, createdAt := extractPlatformInfo(info)
+
 			files = append(files, filekit.FileInfo{
 				Name:        info.Name(),
 				Path:        relPath,
@@ -337,6 +345,8 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 				ModTime:     info.ModTime(),
 				IsDir:       info.IsDir(),
 				ContentType: contentType,
+				Owner:       owner,
+				CreatedAt:   createdAt,
 			})
 
 			return nil
@@ -364,6 +374,9 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 				contentType = getContentType(filepath.Join(a.root, entryPath))
 			}
 
+			// Extract platform-specific information
+			owner, createdAt := extractPlatformInfo(info)
+
 			files = append(files, filekit.FileInfo{
 				Name:        entry.Name(),
 				Path:        entryPath,
@@ -371,6 +384,8 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 				ModTime:     info.ModTime(),
 				IsDir:       info.IsDir(),
 				ContentType: contentType,
+				Owner:       owner,
+				CreatedAt:   createdAt,
 			})
 		}
 	}

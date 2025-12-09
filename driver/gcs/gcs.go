@@ -260,14 +260,38 @@ func (a *Adapter) Stat(ctx context.Context, filePath string) (*filekit.FileInfo,
 	// Determine if it's a directory
 	isDir := strings.HasSuffix(key, "/") || attrs.ContentType == "application/x-directory"
 
+	// Determine checksum - prefer CRC32C (GCS native), fall back to MD5
+	var checksum string
+	var checksumAlgorithm filekit.ChecksumAlgorithm
+	if attrs.CRC32C != 0 {
+		// CRC32C is stored as uint32, encode to hex
+		checksum = fmt.Sprintf("%08x", attrs.CRC32C)
+		checksumAlgorithm = filekit.ChecksumCRC32C
+	} else if len(attrs.MD5) > 0 {
+		checksum = hex.EncodeToString(attrs.MD5)
+		checksumAlgorithm = filekit.ChecksumMD5
+	}
+
+	// Handle CreatedAt
+	var createdAt *time.Time
+	if !attrs.Created.IsZero() {
+		createdAt = &attrs.Created
+	}
+
 	return &filekit.FileInfo{
-		Name:        filepath.Base(filePath),
-		Path:        filePath,
-		Size:        attrs.Size,
-		ModTime:     attrs.Updated,
-		IsDir:       isDir,
-		ContentType: attrs.ContentType,
-		Metadata:    attrs.Metadata,
+		Name:              filepath.Base(filePath),
+		Path:              filePath,
+		Size:              attrs.Size,
+		ModTime:           attrs.Updated,
+		IsDir:             isDir,
+		ContentType:       attrs.ContentType,
+		Metadata:          attrs.Metadata,
+		ETag:              attrs.Etag,
+		Version:           strconv.FormatInt(attrs.Generation, 10),
+		StorageClass:      attrs.StorageClass,
+		Checksum:          checksum,
+		ChecksumAlgorithm: checksumAlgorithm,
+		CreatedAt:         createdAt,
 	}, nil
 }
 
@@ -339,14 +363,37 @@ func (a *Adapter) ListContents(ctx context.Context, path string, recursive bool)
 
 		isDir := strings.HasSuffix(attrs.Name, "/") || attrs.ContentType == "application/x-directory"
 
+		// Determine checksum - prefer CRC32C (GCS native), fall back to MD5
+		var checksum string
+		var checksumAlgorithm filekit.ChecksumAlgorithm
+		if attrs.CRC32C != 0 {
+			checksum = fmt.Sprintf("%08x", attrs.CRC32C)
+			checksumAlgorithm = filekit.ChecksumCRC32C
+		} else if len(attrs.MD5) > 0 {
+			checksum = hex.EncodeToString(attrs.MD5)
+			checksumAlgorithm = filekit.ChecksumMD5
+		}
+
+		// Handle CreatedAt
+		var createdAt *time.Time
+		if !attrs.Created.IsZero() {
+			createdAt = &attrs.Created
+		}
+
 		files = append(files, filekit.FileInfo{
-			Name:        filepath.Base(strings.TrimSuffix(attrs.Name, "/")),
-			Path:        strings.TrimPrefix(attrs.Name, a.prefix),
-			Size:        attrs.Size,
-			ModTime:     attrs.Updated,
-			IsDir:       isDir,
-			ContentType: attrs.ContentType,
-			Metadata:    attrs.Metadata,
+			Name:              filepath.Base(strings.TrimSuffix(attrs.Name, "/")),
+			Path:              strings.TrimPrefix(attrs.Name, a.prefix),
+			Size:              attrs.Size,
+			ModTime:           attrs.Updated,
+			IsDir:             isDir,
+			ContentType:       attrs.ContentType,
+			Metadata:          attrs.Metadata,
+			ETag:              attrs.Etag,
+			Version:           strconv.FormatInt(attrs.Generation, 10),
+			StorageClass:      attrs.StorageClass,
+			Checksum:          checksum,
+			ChecksumAlgorithm: checksumAlgorithm,
+			CreatedAt:         createdAt,
 		})
 	}
 

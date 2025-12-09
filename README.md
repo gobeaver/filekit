@@ -192,10 +192,18 @@ type FileSystem interface {
 }
 ```
 
+### Helper Functions
+
+```go
+// GetFileInfo is an alias for Stat with a more descriptive name
+info, err := filekit.GetFileInfo(ctx, fs, "path/to/file.txt")
+```
+
 ### FileInfo Struct
 
 ```go
 type FileInfo struct {
+    // Core fields (always populated)
     Name        string            // Base name of the file
     Path        string            // Full path to the file
     Size        int64             // Size in bytes
@@ -203,8 +211,55 @@ type FileInfo struct {
     IsDir       bool              // True if directory
     ContentType string            // MIME type
     Metadata    map[string]string // Custom metadata
+
+    // Extended fields (driver-dependent, may be empty)
+    ETag              string            // Entity tag for caching
+    Version           string            // Version ID (versioned storage)
+    StorageClass      string            // Storage tier (STANDARD, GLACIER, etc.)
+    Checksum          string            // Pre-computed checksum (if available)
+    ChecksumAlgorithm ChecksumAlgorithm // Algorithm used for Checksum
+    CreatedAt         *time.Time        // Creation time (platform-dependent)
+    Owner             *FileOwner        // Owner info (platform-dependent)
 }
 ```
+
+### Driver Capabilities Matrix
+
+Not all `FileInfo` fields are available on all drivers. This is **intentional** - FileKit returns what's available without expensive additional API calls.
+
+#### Stat() vs ListContents()
+
+| Field | Stat() | ListContents() | Notes |
+|-------|--------|----------------|-------|
+| Name, Path, Size, ModTime, IsDir | ✅ All | ✅ All | Always available |
+| ContentType | ✅ All | ✅ All | Detected or from metadata |
+| Metadata | ✅ All | ✅ Cloud only | Local/Memory don't store metadata |
+| ETag | ✅ Cloud | ✅ Cloud | S3, GCS, Azure only |
+| Version | ✅ Cloud | ❌ | Requires HEAD/GetProperties per object |
+| StorageClass | ✅ Cloud | ✅ S3 only | GCS/Azure need individual requests |
+| Checksum | ✅ Cloud | ❌ | Requires HEAD per object (expensive) |
+| CreatedAt | ✅ Varies | ✅ Varies | See platform notes below |
+| Owner | ✅ Unix | ✅ Unix | See platform notes below |
+
+#### Platform-Specific Limitations
+
+| Driver | Field | Status | Reason |
+|--------|-------|--------|--------|
+| **Local (Linux)** | CreatedAt | ❌ nil | `Stat_t` lacks birth time; needs `statx()` (kernel 4.11+) |
+| **Local (macOS)** | CreatedAt | ✅ | `Birthtimespec` available in `Stat_t` |
+| **Local (Windows)** | CreatedAt | ✅ | `CreationTime` in `Win32FileAttributeData` |
+| **Local (Windows)** | Owner | ❌ nil | Requires complex `GetSecurityInfo` API |
+| **Local (Unix)** | Owner | ✅ UID | GID available but not username lookup |
+| **SFTP** | Owner | ✅ UID | From `FileStat` |
+| **SFTP** | CreatedAt | ❌ nil | SSH protocol doesn't expose creation time |
+| **Memory** | CreatedAt | ✅ | Tracked internally |
+| **Cloud (S3/GCS/Azure)** | CreatedAt | ✅ | Cloud providers track creation time |
+
+#### Design Rationale
+
+- **ListContents() is optimized for speed**: It uses list APIs that return basic metadata. Getting full details for 1000 files would require 1000 HEAD requests.
+- **Stat() returns full metadata**: When you need complete info for a specific file, use `Stat()`.
+- **nil means "not available"**: Check for nil before using optional fields like `CreatedAt` and `Owner`.
 
 ### ChunkedUploader Interface
 

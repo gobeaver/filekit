@@ -288,14 +288,52 @@ func (a *Adapter) Stat(ctx context.Context, filePath string) (*filekit.FileInfo,
 		}
 	}
 
+	// Extract ETag
+	var etag string
+	if props.ETag != nil {
+		etag = string(*props.ETag)
+	}
+
+	// Extract Version
+	var version string
+	if props.VersionID != nil {
+		version = *props.VersionID
+	}
+
+	// Extract StorageClass (AccessTier in Azure)
+	var storageClass string
+	if props.AccessTier != nil {
+		storageClass = string(*props.AccessTier)
+	}
+
+	// Extract Checksum (ContentMD5 in Azure)
+	var checksum string
+	var checksumAlgorithm filekit.ChecksumAlgorithm
+	if props.ContentMD5 != nil && len(props.ContentMD5) > 0 {
+		checksum = hex.EncodeToString(props.ContentMD5)
+		checksumAlgorithm = filekit.ChecksumMD5
+	}
+
+	// Extract CreatedAt
+	var createdAt *time.Time
+	if props.CreationTime != nil {
+		createdAt = props.CreationTime
+	}
+
 	return &filekit.FileInfo{
-		Name:        filepath.Base(filePath),
-		Path:        filePath,
-		Size:        size,
-		ModTime:     modTime,
-		IsDir:       isDir,
-		ContentType: contentType,
-		Metadata:    metadata,
+		Name:              filepath.Base(filePath),
+		Path:              filePath,
+		Size:              size,
+		ModTime:           modTime,
+		IsDir:             isDir,
+		ContentType:       contentType,
+		Metadata:          metadata,
+		ETag:              etag,
+		Version:           version,
+		StorageClass:      storageClass,
+		Checksum:          checksum,
+		ChecksumAlgorithm: checksumAlgorithm,
+		CreatedAt:         createdAt,
 	}, nil
 }
 
@@ -359,13 +397,52 @@ func (a *Adapter) ListContents(ctx context.Context, dirPath string, recursive bo
 
 				isDir := strings.HasSuffix(*blobItem.Name, "/") || (contentType == "application/x-directory")
 
+				// Extract additional fields from Properties
+				var etag, version, storageClass, checksum string
+				var checksumAlgorithm filekit.ChecksumAlgorithm
+				var createdAt *time.Time
+
+				if blobItem.Properties != nil {
+					if blobItem.Properties.ETag != nil {
+						etag = string(*blobItem.Properties.ETag)
+					}
+					if blobItem.Properties.AccessTier != nil {
+						storageClass = string(*blobItem.Properties.AccessTier)
+					}
+					if blobItem.Properties.ContentMD5 != nil && len(blobItem.Properties.ContentMD5) > 0 {
+						checksum = hex.EncodeToString(blobItem.Properties.ContentMD5)
+						checksumAlgorithm = filekit.ChecksumMD5
+					}
+					if blobItem.Properties.CreationTime != nil {
+						createdAt = blobItem.Properties.CreationTime
+					}
+				}
+				if blobItem.VersionID != nil {
+					version = *blobItem.VersionID
+				}
+
+				// Convert metadata
+				metadata := make(map[string]string, len(blobItem.Metadata))
+				for k, v := range blobItem.Metadata {
+					if v != nil {
+						metadata[k] = *v
+					}
+				}
+
 				files = append(files, filekit.FileInfo{
-					Name:        filepath.Base(relativePath),
-					Path:        path.Join(dirPath, relativePath),
-					Size:        size,
-					ModTime:     modTime,
-					IsDir:       isDir,
-					ContentType: contentType,
+					Name:              filepath.Base(relativePath),
+					Path:              path.Join(dirPath, relativePath),
+					Size:              size,
+					ModTime:           modTime,
+					IsDir:             isDir,
+					ContentType:       contentType,
+					Metadata:          metadata,
+					ETag:              etag,
+					Version:           version,
+					StorageClass:      storageClass,
+					Checksum:          checksum,
+					ChecksumAlgorithm: checksumAlgorithm,
+					CreatedAt:         createdAt,
 				})
 			}
 		}
@@ -419,6 +496,11 @@ func (a *Adapter) ListContents(ctx context.Context, dirPath string, recursive bo
 				var modTime time.Time
 				var contentType string
 
+				// Extract additional fields from Properties
+				var etag, version, storageClass, checksum string
+				var checksumAlgorithm filekit.ChecksumAlgorithm
+				var createdAt *time.Time
+
 				if blobItem.Properties != nil {
 					if blobItem.Properties.ContentLength != nil {
 						size = *blobItem.Properties.ContentLength
@@ -429,15 +511,46 @@ func (a *Adapter) ListContents(ctx context.Context, dirPath string, recursive bo
 					if blobItem.Properties.ContentType != nil {
 						contentType = *blobItem.Properties.ContentType
 					}
+					if blobItem.Properties.ETag != nil {
+						etag = string(*blobItem.Properties.ETag)
+					}
+					if blobItem.Properties.AccessTier != nil {
+						storageClass = string(*blobItem.Properties.AccessTier)
+					}
+					if blobItem.Properties.ContentMD5 != nil && len(blobItem.Properties.ContentMD5) > 0 {
+						checksum = hex.EncodeToString(blobItem.Properties.ContentMD5)
+						checksumAlgorithm = filekit.ChecksumMD5
+					}
+					if blobItem.Properties.CreationTime != nil {
+						createdAt = blobItem.Properties.CreationTime
+					}
+				}
+				if blobItem.VersionID != nil {
+					version = *blobItem.VersionID
+				}
+
+				// Convert metadata
+				metadata := make(map[string]string, len(blobItem.Metadata))
+				for k, v := range blobItem.Metadata {
+					if v != nil {
+						metadata[k] = *v
+					}
 				}
 
 				files = append(files, filekit.FileInfo{
-					Name:        fileName,
-					Path:        path.Join(dirPath, fileName),
-					Size:        size,
-					ModTime:     modTime,
-					IsDir:       false,
-					ContentType: contentType,
+					Name:              fileName,
+					Path:              path.Join(dirPath, fileName),
+					Size:              size,
+					ModTime:           modTime,
+					IsDir:             false,
+					ContentType:       contentType,
+					Metadata:          metadata,
+					ETag:              etag,
+					Version:           version,
+					StorageClass:      storageClass,
+					Checksum:          checksum,
+					ChecksumAlgorithm: checksumAlgorithm,
+					CreatedAt:         createdAt,
 				})
 			}
 		}
