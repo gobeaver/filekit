@@ -1712,6 +1712,17 @@ If you have a use case that requires mirror writes, please open an issue to disc
 
 ---
 
+## LLM Documentation
+
+FileKit includes compact YAML documentation files optimized for LLM consumption:
+
+- [`llm.yaml`](./llm.yaml) - Core filekit package API reference
+- [`filevalidator/llm.yaml`](./filevalidator/llm.yaml) - FileValidator package API reference
+
+These files provide structured, concise API documentation with examples that LLMs can use to understand and generate code using FileKit.
+
+---
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
