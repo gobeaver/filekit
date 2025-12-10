@@ -1651,10 +1651,10 @@ github.com/gobeaver/filekit/           # Main module
 | Amazon S3 | ✅ | ⚠️ Third-party | ✅ | ⚠️ Third-party | ⚠️ Third-party |
 | Google Cloud Storage | ✅ | ❌ | ✅ | ⚠️ Third-party | ⚠️ Third-party |
 | Azure Blob Storage | ✅ | ❌ | ✅ | ⚠️ Third-party | ⚠️ Third-party |
-| SFTP | ✅ | ❌ | ✅ | ✅ | ❌ |
+| SFTP | ✅ | ✅ | ✅ | ✅ | ❌ |
 | In-memory | ✅ | ✅ | ✅ | ✅ | ✅ |
 | ZIP Archive | ✅ | ❌ | ✅ | ✅ | ❌ |
-| **Mount Manager** | ✅ | ⚠️ | ✅ | ✅ | ✅ |
+| **Mount Manager** | ✅ |  ⚠️ Layering only  | ✅ | ✅ | ✅ |
 | **Built-in encryption** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **File validation** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Checksums** | ✅ | ❌ | ✅ | ❌ | ❌ |

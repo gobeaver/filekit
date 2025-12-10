@@ -1,0 +1,318 @@
+# FileKit - LLM Compact Documentation
+# Multi-module filesystem abstraction library for Go
+# Supports: Local, S3, GCS, Azure, SFTP, Memory, ZIP backends
+
+package: github.com/gobeaver/filekit
+version: v1
+go_version: "1.21+"
+
+# Core interfaces - use FileReader for read-only function signatures
+interfaces:
+  FileReader:
+    description: Read-only filesystem operations
+    methods:
+      - "Read(ctx context.Context, path string) (io.ReadCloser, error)"
+      - "ReadAll(ctx context.Context, path string) ([]byte, error)"
+      - "FileExists(ctx context.Context, path string) (bool, error)"
+      - "DirExists(ctx context.Context, path string) (bool, error)"
+      - "Stat(ctx context.Context, path string) (*FileInfo, error)"
+      - "ListContents(ctx context.Context, path string, recursive bool) ([]FileInfo, error)"
+
+  FileWriter:
+    description: Write filesystem operations
+    methods:
+      - "Write(ctx context.Context, path string, r io.Reader, opts ...Option) (*WriteResult, error)"
+      - "Delete(ctx context.Context, path string) error"
+      - "CreateDir(ctx context.Context, path string) error"
+      - "DeleteDir(ctx context.Context, path string) error"
+
+  FileSystem:
+    description: Combined FileReader + FileWriter
+    embeds: [FileReader, FileWriter]
+
+# Optional capabilities - use type assertion to check
+optional_interfaces:
+  CanCopy:
+    method: "Copy(ctx context.Context, src, dst string) error"
+  CanMove:
+    method: "Move(ctx context.Context, src, dst string) error"
+  CanChecksum:
+    methods:
+      - "Checksum(ctx context.Context, path string, algorithm ChecksumAlgorithm) (string, error)"
+      - "Checksums(ctx context.Context, path string, algorithms []ChecksumAlgorithm) (map[ChecksumAlgorithm]string, error)"
+    algorithms: [md5, sha1, sha256, sha512, crc32, crc32c, xxhash]
+  CanSignURL:
+    description: Pre-signed URLs for cloud drivers
+    methods:
+      - "SignedURL(ctx context.Context, path string, expires time.Duration) (string, error)"
+      - "SignedUploadURL(ctx context.Context, path string, expires time.Duration) (string, error)"
+  CanWatch:
+    description: File change notifications (ChangeToken pattern)
+    method: "Watch(ctx context.Context, pattern string) (ChangeToken, error)"
+  CanReadRange:
+    description: Partial file reads for streaming/resume
+    method: "ReadRange(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error)"
+
+# Key types
+types:
+  FileInfo:
+    fields:
+      - Name, Path, Size, ModTime, IsDir, ContentType
+      - Metadata (map[string]string)
+      - ETag, Version, StorageClass
+      - Checksum, ChecksumAlgorithm
+      - CreatedAt, AccessedAt (*time.Time)
+      - Owner (*FileOwner), Permissions (*FilePermissions)
+
+  WriteResult:
+    description: Returned from Write operations
+    fields:
+      - BytesWritten (int64)
+      - Checksum, ChecksumAlgorithm
+      - Version, ETag
+      - ServerTimestamp (time.Time)
+      - Metadata (map[string]string)
+
+  Visibility:
+    values: [Private, Public, Protected]
+
+# Write options - functional options pattern
+options:
+  - "WithContentType(contentType string) Option"
+  - "WithMetadata(metadata map[string]string) Option"
+  - "WithVisibility(visibility Visibility) Option"
+  - "WithCacheControl(cacheControl string) Option"
+  - "WithOverwrite(overwrite bool) Option"
+  - "WithEncryption(algorithm string, key []byte) Option"
+  - "WithExpires(expires time.Time) Option"
+  - "WithContentDisposition(disposition string) Option"
+  - "WithACL(acl string) Option"
+  - "WithValidator(validator filevalidator.Validator) Option"
+
+# Initialization patterns
+initialization:
+  from_config:
+    code: |
+      cfg, _ := filekit.GetConfig()
+      fs, err := filekit.New(cfg)
+  from_env:
+    code: |
+      fs, err := filekit.NewFromEnv()
+  global_instance:
+    code: |
+      filekit.InitFromEnv()
+      fs := filekit.FS()
+  custom_prefix:
+    code: |
+      fs, err := filekit.WithPrefix("MYAPP_").New()
+
+# Drivers - import path registers driver
+drivers:
+  local:
+    import: github.com/gobeaver/filekit/driver/local
+    capabilities: [CanCopy, CanMove, CanChecksum, CanWatch, CanReadRange]
+  s3:
+    import: github.com/gobeaver/filekit/driver/s3
+    capabilities: [CanCopy, CanSignURL, CanChecksum, ChunkedUploader]
+  gcs:
+    import: github.com/gobeaver/filekit/driver/gcs
+    capabilities: [CanCopy, CanSignURL, CanChecksum]
+  azure:
+    import: github.com/gobeaver/filekit/driver/azure
+    capabilities: [CanCopy, CanSignURL]
+  sftp:
+    import: github.com/gobeaver/filekit/driver/sftp
+    capabilities: [CanCopy, CanMove]
+  memory:
+    import: github.com/gobeaver/filekit/driver/memory
+    capabilities: [CanCopy, CanMove, CanChecksum]
+  zip:
+    import: github.com/gobeaver/filekit/driver/zip
+    capabilities: []
+
+# Decorators - stackable in any order
+decorators:
+  encryption:
+    constructor: "NewEncryptedFS(fs FileSystem, key []byte, opts ...EncryptedFSOption) (*EncryptedFS, error)"
+    description: AES-256-GCM transparent encryption
+    options:
+      - "WithChunkSize(size int) EncryptedFSOption"
+
+  validation:
+    constructor: "NewValidatedFileSystem(fs FileSystem, validator filevalidator.Validator) *ValidatedFileSystem"
+    description: Validates files on write using filevalidator
+
+  caching:
+    constructor: "NewCachingFileSystem(fs FileSystem, cache Cache, opts ...CacheOption) *CachingFileSystem"
+    description: Metadata caching layer
+    options:
+      - "WithCacheTTL(ttl time.Duration)"
+      - "WithCacheExists(enabled bool)"
+      - "WithCacheFileInfo(enabled bool)"
+      - "WithCacheList(enabled bool)"
+      - "WithInvalidateOnWrite(enabled bool)"
+    cache_impl: "NewMemoryCache() *MemoryCache"
+
+  readonly:
+    constructor: "NewReadOnlyFileSystem(fs FileSystem, opts ...ReadOnlyOption) *ReadOnlyFileSystem"
+    description: Write protection decorator
+    options:
+      - "WithAllowCreateDir(allow bool)"
+      - "WithAllowDelete(allow bool)"
+
+# Mount manager - virtual path namespacing
+mount_manager:
+  constructor: "NewMountManager() *MountManager"
+  methods:
+    - "Mount(mountPath string, fs FileSystem) error"
+    - "Unmount(mountPath string) error"
+    - "Mounts() map[string]FileSystem"
+    - "Copy(ctx, srcPath, dstPath string) error  # cross-mount"
+    - "Move(ctx, srcPath, dstPath string) error  # cross-mount"
+  note: Implements full FileSystem interface with longest-prefix routing
+
+# Error handling
+errors:
+  codes:
+    existence: [FILEKIT_NOT_FOUND, FILEKIT_ALREADY_EXISTS, FILEKIT_TYPE_MISMATCH]
+    access: [FILEKIT_PERMISSION, FILEKIT_AUTH, FILEKIT_QUOTA]
+    validation: [FILEKIT_INVALID_INPUT, FILEKIT_VALIDATION]
+    operation: [FILEKIT_NOT_SUPPORTED, FILEKIT_ABORTED, FILEKIT_TIMEOUT, FILEKIT_CLOSED]
+    infrastructure: [FILEKIT_IO, FILEKIT_NETWORK, FILEKIT_SERVICE, FILEKIT_RATE_LIMIT]
+    other: [FILEKIT_INTEGRITY, FILEKIT_MOUNT, FILEKIT_INTERNAL]
+
+  categories:
+    - CategoryNotFound
+    - CategoryConflict
+    - CategoryPermission
+    - CategoryValidation
+    - CategoryTransient
+    - CategoryPermanent
+    - CategoryNotSupported
+
+  FileError_methods:
+    - "Code() ErrorCode"
+    - "Category() ErrorCategory"
+    - "IsRetryable() bool"
+    - "RetryAfter() time.Duration"
+    - "HTTPStatus() int"
+    - "Details() map[string]any"
+    - "WithCause(err error) *FileError"
+    - "WithDriver(d string) *FileError"
+    - "WithRetry(r bool, d time.Duration) *FileError"
+
+  constructors:
+    - "NewError(code ErrorCode, message string) *FileError"
+    - "NewPathError(op, path string, code ErrorCode, message string) *FileError"
+    - "WrapPath(err error, op, path string, code ErrorCode, message string) *FileError"
+    - "WrapPathErr(op, path string, err error) *FileError"
+    - "ToFileError(err error) *FileError"
+
+  helpers:
+    - "IsNotFound(err error) bool"
+    - "IsPermissionErr(err error) bool"
+    - "IsValidationErr(err error) bool"
+    - "IsTemporary(err error) bool"
+    - "IsRetryableErr(err error) bool"
+    - "GetRetryAfter(err error) time.Duration"
+    - "IsCode(err error, code ErrorCode) bool"
+    - "GetCode(err error) ErrorCode"
+    - "GetCategory(err error) ErrorCategory"
+
+  MultiError:
+    description: Batch operation error collection
+    constructor: "NewMultiError(op string) *MultiError"
+    methods: ["Add(err error)", "Err() error", "HasErrors() bool", "PartialSuccess() bool"]
+
+# File selection (filtering)
+selectors:
+  interface: "FileSelector { Match(*FileInfo) bool; TraverseDescendants(*FileInfo) bool }"
+  usage: "ListWithSelector(ctx, fs, path string, selector FileSelector, recursive bool) ([]FileInfo, error)"
+  builtins:
+    - "All() FileSelector"
+    - "Glob(pattern string) FileSelector"
+    - "Depth(maxDepth int, basePath string) FileSelector"
+    - "And(selectors ...FileSelector) FileSelector"
+    - "Or(selectors ...FileSelector) FileSelector"
+    - "Not(selector FileSelector) FileSelector"
+    - "FuncSelector(fn func(*FileInfo) bool) FileSelector"
+
+# Checksum utilities
+checksum:
+  - "NewHasher(algorithm ChecksumAlgorithm) (hash.Hash, error)"
+  - "CalculateChecksum(r io.Reader, algorithm ChecksumAlgorithm) (string, error)"
+  - "VerifyChecksum(ctx, fs, path, expected string, algorithm) (bool, error)"
+
+# Usage examples
+examples:
+  basic_write:
+    code: |
+      fs, _ := filekit.New(cfg)
+      result, err := fs.Write(ctx, "file.txt", strings.NewReader("hello"),
+          filekit.WithContentType("text/plain"),
+          filekit.WithVisibility(filekit.Public))
+
+  read_file:
+    code: |
+      data, err := fs.ReadAll(ctx, "file.txt")
+      // or streaming:
+      reader, err := fs.Read(ctx, "file.txt")
+      defer reader.Close()
+
+  check_capability:
+    code: |
+      if copier, ok := fs.(filekit.CanCopy); ok {
+          err := copier.Copy(ctx, "src.txt", "dst.txt")
+      }
+      if signer, ok := fs.(filekit.CanSignURL); ok {
+          url, err := signer.SignedURL(ctx, "file.pdf", 15*time.Minute)
+      }
+
+  stack_decorators:
+    code: |
+      fs, _ := filekit.New(cfg)
+      fs, _ = filekit.NewEncryptedFS(fs, key)
+      fs = filekit.NewValidatedFileSystem(fs, validator)
+      fs = filekit.NewCachingFileSystem(fs, filekit.NewMemoryCache())
+
+  mount_manager:
+    code: |
+      mounts := filekit.NewMountManager()
+      mounts.Mount("/local", localDriver)
+      mounts.Mount("/cloud", s3Driver)
+      mounts.Write(ctx, "/local/file.txt", reader)
+      mounts.Copy(ctx, "/local/file.txt", "/cloud/backup.txt")
+
+  error_handling:
+    code: |
+      _, err := fs.Read(ctx, "file.txt")
+      if filekit.IsNotFound(err) {
+          // handle not found
+      }
+      if fe := filekit.ToFileError(err); fe != nil {
+          if fe.IsRetryable() {
+              time.Sleep(fe.RetryAfter())
+          }
+          log.Printf("HTTP %d: %s", fe.HTTPStatus(), fe.Code())
+      }
+
+  file_selection:
+    code: |
+      selector := filekit.And(
+          filekit.Glob("*.jpg"),
+          filekit.FuncSelector(func(f *filekit.FileInfo) bool {
+              return f.Size < 10*1024*1024
+          }),
+      )
+      files, err := filekit.ListWithSelector(ctx, fs, "/images", selector, true)
+
+# Environment variables (FILEKIT_ prefix)
+env_vars:
+  driver: FILEKIT_DRIVER
+  local: [FILEKIT_LOCAL_BASE_PATH]
+  s3: [FILEKIT_S3_REGION, FILEKIT_S3_BUCKET, FILEKIT_S3_PREFIX, FILEKIT_S3_ENDPOINT, FILEKIT_S3_ACCESS_KEY_ID, FILEKIT_S3_SECRET_ACCESS_KEY]
+  gcs: [FILEKIT_GCS_BUCKET, FILEKIT_GCS_PREFIX, FILEKIT_GCS_CREDENTIALS_FILE, FILEKIT_GCS_PROJECT_ID]
+  azure: [FILEKIT_AZURE_ACCOUNT_NAME, FILEKIT_AZURE_ACCOUNT_KEY, FILEKIT_AZURE_CONTAINER_NAME]
+  sftp: [FILEKIT_SFTP_HOST, FILEKIT_SFTP_PORT, FILEKIT_SFTP_USERNAME, FILEKIT_SFTP_PASSWORD, FILEKIT_SFTP_PRIVATE_KEY]
+  defaults: [FILEKIT_DEFAULT_VISIBILITY, FILEKIT_DEFAULT_CACHE_CONTROL, FILEKIT_MAX_FILE_SIZE]
+  encryption: [FILEKIT_ENCRYPTION_ENABLED, FILEKIT_ENCRYPTION_KEY]

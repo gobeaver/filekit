@@ -1,0 +1,315 @@
+# FileValidator - LLM Compact Documentation
+# Standalone file validation library for Go
+# Zero dependencies, 60+ format validators, ZIP bomb protection
+
+package: github.com/gobeaver/filekit/filevalidator
+version: v1
+go_version: "1.21+"
+
+# Core interface
+interfaces:
+  Validator:
+    description: Main validation interface
+    methods:
+      - "Validate(file *multipart.FileHeader) error"
+      - "ValidateWithContext(ctx context.Context, file *multipart.FileHeader) error"
+      - "ValidateReader(reader io.Reader, filename string, size int64) error"
+      - "ValidateBytes(content []byte, filename string) error"
+      - "GetConstraints() Constraints"
+
+# Size constants
+constants:
+  KB: 1024
+  MB: 1048576      # 1024 * 1024
+  GB: 1073741824   # 1024 * 1024 * 1024
+
+# Builder API - fluent configuration
+builder:
+  constructors:
+    - "NewBuilder() *Builder      # starts with DefaultConstraints"
+    - "Empty() *Builder           # starts with minimal constraints"
+
+  build_method: "Build() *FileValidator"
+
+  size_methods:
+    - "MaxSize(size int64) *Builder"
+    - "MinSize(size int64) *Builder"
+    - "SizeRange(minSize, maxSize int64) *Builder"
+
+  mime_methods:
+    - "Accept(mimeTypes ...string) *Builder   # e.g., 'image/png', 'image/*'"
+    - "AcceptImages() *Builder"
+    - "AcceptDocuments() *Builder"
+    - "AcceptAudio() *Builder"
+    - "AcceptVideo() *Builder"
+    - "AcceptMedia() *Builder                  # audio + video"
+    - "AcceptAll() *Builder                    # '*/*'"
+    - "StrictMIME() *Builder                   # require extension matches MIME"
+
+  extension_methods:
+    - "Extensions(exts ...string) *Builder       # e.g., '.jpg', '.png'"
+    - "BlockExtensions(exts ...string) *Builder  # e.g., '.exe', '.bat'"
+    - "RequireExtension() *Builder"
+    - "AllowNoExtension() *Builder"
+
+  filename_methods:
+    - "MaxNameLength(length int) *Builder"
+    - "FileNamePattern(pattern *regexp.Regexp) *Builder"
+    - "FileNamePatternString(pattern string) *Builder"
+    - "DangerousChars(chars ...string) *Builder"
+
+  content_methods:
+    - "WithContentValidation() *Builder"
+    - "WithoutContentValidation() *Builder"
+    - "RequireContentValidation() *Builder      # make mandatory"
+    - "WithRegistry(registry *ContentValidatorRegistry) *Builder"
+    - "WithDefaultRegistry() *Builder           # all validators"
+    - "WithMinimalRegistry() *Builder           # ZIP, Image, PDF only"
+
+# Presets - return *Builder for further customization
+presets:
+  ForImages:
+    description: JPEG, PNG, GIF, WebP, SVG, BMP, TIFF
+    default_max_size: 10MB
+
+  ForDocuments:
+    description: PDF, Word, Excel, PowerPoint, TXT, CSV
+    default_max_size: 50MB
+
+  ForMedia:
+    description: Audio + Video formats
+    default_max_size: 500MB
+
+  ForArchives:
+    description: ZIP, TAR, GZIP
+    default_max_size: 1GB
+
+  ForWeb:
+    description: Images + Documents
+    default_max_size: 25MB
+
+  Strict:
+    description: Strict MIME validation, required extensions, required content validation
+
+# Error handling
+errors:
+  types:
+    ErrorTypeSize: size validation failed
+    ErrorTypeMIME: MIME type validation failed
+    ErrorTypeFileName: filename validation failed
+    ErrorTypeExtension: extension validation failed
+    ErrorTypeContent: content validation failed
+
+  ValidationError:
+    fields: [Type (ValidationErrorType), Message (string)]
+    implements: error
+
+  helpers:
+    - "IsValidationError(err error) bool"
+    - "IsErrorOfType(err error, errType ValidationErrorType) bool"
+    - "GetErrorType(err error) ValidationErrorType"
+    - "GetErrorMessage(err error) string"
+
+# Content validators
+content_validation:
+  interface: |
+    ContentValidator {
+        ValidateContent(reader io.Reader, size int64) error
+        SupportedMIMETypes() []string
+    }
+
+  registry:
+    constructor: "NewContentValidatorRegistry() *ContentValidatorRegistry"
+    methods:
+      - "Register(mimeType string, validator ContentValidator)"
+      - "GetValidator(mimeType string) ContentValidator"
+      - "ValidateContent(mimeType string, reader io.Reader, size int64) error"
+      - "HasValidator(mimeType string) bool"
+      - "Clone() *ContentValidatorRegistry"
+
+  registry_factories:
+    - "DefaultRegistry() *ContentValidatorRegistry       # all validators"
+    - "GetDefaultRegistry() *ContentValidatorRegistry   # lazy-initialized global"
+    - "MinimalRegistry() *ContentValidatorRegistry      # ZIP, Image, PDF only"
+    - "ImageOnlyRegistry() *ContentValidatorRegistry"
+    - "DocumentOnlyRegistry() *ContentValidatorRegistry"
+    - "MediaOnlyRegistry() *ContentValidatorRegistry"
+
+  builtin_validators:
+    archive:
+      type: ArchiveValidator
+      fields: [MaxCompressionRatio, MaxFiles, MaxUncompressedSize, MaxNestedArchives]
+      constructor: "DefaultArchiveValidator() *ArchiveValidator"
+
+    image:
+      type: ImageValidator
+      fields: [MaxWidth, MaxHeight, MaxPixels, MinWidth, MinHeight, AllowSVG, MaxSVGSize]
+      constructor: "DefaultImageValidator() *ImageValidator"
+
+    pdf:
+      type: PDFValidator
+      fields: [MaxSize]
+      constructor: "DefaultPDFValidator() *PDFValidator"
+
+    office:
+      type: OfficeValidator
+      fields: [MaxSize, MaxUncompressedSize, MaxFiles, MaxCompressionRatio, AllowMacros]
+      constructor: "DefaultOfficeValidator() *OfficeValidator"
+
+    media:
+      - "DefaultMP4Validator(), DefaultMP3Validator(), DefaultWebMValidator()"
+      - "DefaultWAVValidator(), DefaultOggValidator(), DefaultFLACValidator()"
+      - "DefaultAVIValidator(), DefaultMKVValidator(), DefaultMOVValidator()"
+
+    text:
+      - "DefaultJSONValidator(), DefaultXMLValidator(), DefaultCSVValidator()"
+      - "DefaultPlainTextValidator()"
+
+# MIME detection utilities
+mime_detection:
+  functions:
+    - "DetectMIME(reader io.Reader) (string, error)"
+    - "DetectMIMEFromBytes(data []byte) string"
+    - "IsBinaryMIME(mime string) bool"
+    - "IsExecutableMIME(mime string) bool"
+    - "GetMIMECategory(mime string) string  # 'image', 'video', 'audio', etc."
+    - "MIMETypeForExtension(ext string) string  # '.jpg' -> 'image/jpeg'"
+    - "ExpandAcceptedTypes(acceptedTypes []string) []string  # expand wildcards"
+
+  media_type_groups:
+    - "AllowAllImages ('image/*')"
+    - "AllowAllDocuments ('document/*')"
+    - "AllowAllAudio ('audio/*')"
+    - "AllowAllVideo ('video/*')"
+    - "AllowAllText ('text/*')"
+    - "AllowAll ('*/*')"
+
+# Helper functions
+helpers:
+  - "ValidateLocalFile(validator Validator, filePath string) error"
+  - "CreateFileFromBytes(filename string, content []byte) *multipart.FileHeader"
+  - "CreateFileFromReader(filename string, reader io.Reader) (*multipart.FileHeader, error)"
+  - "HasSupportedImageExtension(filename string) bool"
+  - "HasSupportedDocumentExtension(filename string) bool"
+  - "DetectContentType(data []byte) string"
+  - "IsImage(contentType string) bool"
+  - "IsDocument(contentType string) bool"
+  - "StreamValidate(reader io.Reader, filename string, validator Validator, bufferSize int64) error"
+  - "FormatSizeReadable(size int64) string  # '10.5 MB'"
+
+# Supported formats (60+ magic signatures)
+supported_formats:
+  images: [JPEG, PNG, GIF, WebP, SVG, BMP, TIFF, HEIC, AVIF, ICO]
+  documents: [PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT, CSV, RTF]
+  archives: [ZIP, TAR, GZIP, RAR, 7z, BZIP2, XZ]
+  audio: [MP3, WAV, FLAC, OGG, AAC, MIDI]
+  video: [MP4, WebM, MKV, MOV, AVI, 3GPP, FLV]
+  fonts: [WOFF, WOFF2, OTF, TTF]
+  executables_blocked: [EXE, ELF, Mach-O, DLL]
+  text: [JSON, XML, HTML, CSS, JavaScript, Markdown]
+
+# Default constraints
+defaults:
+  max_size: 10MB
+  min_size: 1 byte
+  max_filename_length: 255
+  require_extension: true
+  content_validation: enabled (not required)
+  dangerous_chars: ["../", "\\", ";", "&", "|", ">", "<", "$", "`", "!", "*"]
+  blocked_extensions: [".exe", ".bat", ".cmd", ".sh", ".php", ".jar", ".dll", ".docm", ".xlsm", ".pptm"]
+
+# Security features
+security:
+  - ZIP bomb protection (compression ratio limits)
+  - Path traversal detection (../ blocking)
+  - XXE protection for XML
+  - Decompression bomb protection
+  - Executable blocking
+  - Magic bytes validation (content != extension)
+
+# Usage examples
+examples:
+  quick_preset:
+    code: |
+      validator := filevalidator.ForImages().Build()
+      err := validator.Validate(multipartFileHeader)
+
+  custom_builder:
+    code: |
+      validator := filevalidator.NewBuilder().
+          MaxSize(5 * filevalidator.MB).
+          Accept("image/png", "image/jpeg").
+          Extensions(".png", ".jpg").
+          WithContentValidation().
+          Build()
+
+  from_bytes:
+    code: |
+      err := validator.ValidateBytes(data, "photo.jpg")
+
+  from_reader:
+    code: |
+      err := validator.ValidateReader(reader, "photo.jpg", fileSize)
+
+  with_context:
+    code: |
+      ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+      defer cancel()
+      err := validator.ValidateWithContext(ctx, header)
+
+  local_file:
+    code: |
+      err := filevalidator.ValidateLocalFile(validator, "/path/to/file.jpg")
+
+  error_handling:
+    code: |
+      if err != nil {
+          if filevalidator.IsErrorOfType(err, filevalidator.ErrorTypeSize) {
+              // file too large
+          }
+          if filevalidator.IsErrorOfType(err, filevalidator.ErrorTypeMIME) {
+              // wrong file type
+          }
+      }
+
+  mime_detection:
+    code: |
+      mime, err := filevalidator.DetectMIME(reader)
+      if filevalidator.IsExecutableMIME(mime) {
+          // reject executable
+      }
+
+  custom_registry:
+    code: |
+      registry := filevalidator.NewContentValidatorRegistry()
+      registry.Register("image/png", filevalidator.DefaultImageValidator())
+      registry.Register("application/zip", filevalidator.DefaultArchiveValidator())
+
+      validator := filevalidator.NewBuilder().
+          WithRegistry(registry).
+          Build()
+
+  http_handler:
+    code: |
+      func uploadHandler(w http.ResponseWriter, r *http.Request) {
+          file, header, err := r.FormFile("upload")
+          if err != nil {
+              http.Error(w, err.Error(), http.StatusBadRequest)
+              return
+          }
+          defer file.Close()
+
+          validator := filevalidator.ForImages().MaxSize(5 * filevalidator.MB).Build()
+          if err := validator.Validate(header); err != nil {
+              http.Error(w, err.Error(), http.StatusBadRequest)
+              return
+          }
+          // process valid file...
+      }
+
+  strict_validation:
+    code: |
+      validator := filevalidator.Strict().
+          Accept("image/png", "image/jpeg").
+          MaxSize(2 * filevalidator.MB).
+          Build()
