@@ -299,13 +299,13 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	defer a.mu.Unlock()
 
 	if a.mode == ModeRead {
-		return nil, filekit.NewPathError("write", filePath, filekit.ErrNotAllowed)
+		return nil, filekit.NewPathError("write", filePath, filekit.ErrCodePermission, "operation not allowed")
 	}
 
 	filePath = normalizePath(filePath)
 
 	if !isValidPath(filePath) {
-		return nil, filekit.NewPathError("write", filePath, filekit.ErrNotAllowed)
+		return nil, filekit.NewPathError("write", filePath, filekit.ErrCodePermission, "operation not allowed")
 	}
 
 	opts := processOptions(options...)
@@ -313,17 +313,17 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	// Check if file exists
 	if !opts.Overwrite {
 		if _, exists := a.files[filePath]; exists {
-			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrCodeAlreadyExists, "file already exists")
 		}
 		if _, exists := a.pending[filePath]; exists {
-			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrCodeAlreadyExists, "file already exists")
 		}
 	}
 
 	// Read content
 	data, err := io.ReadAll(content)
 	if err != nil {
-		return nil, filekit.NewPathError("write", filePath, err)
+		return nil, filekit.WrapPathErr("write", filePath, err)
 	}
 
 	// Calculate checksum
@@ -342,11 +342,11 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 
 		w, err := a.writer.CreateHeader(header)
 		if err != nil {
-			return nil, filekit.NewPathError("write", filePath, err)
+			return nil, filekit.WrapPathErr("write", filePath, err)
 		}
 
 		if _, err := w.Write(data); err != nil {
-			return nil, filekit.NewPathError("write", filePath, err)
+			return nil, filekit.WrapPathErr("write", filePath, err)
 		}
 
 		// Add to index
@@ -810,7 +810,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 func (a *Adapter) UploadFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return nil, filekit.NewPathError("uploadfile", localPath, err)
+		return nil, filekit.WrapPathErr("uploadfile", localPath, err)
 	}
 	defer file.Close()
 

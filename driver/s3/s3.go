@@ -102,7 +102,7 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 		// For large files, use ChunkedUploader interface instead
 		data, err := io.ReadAll(content)
 		if err != nil {
-			return nil, filekit.NewPathError("write", filePath, err)
+			return nil, filekit.WrapPathErr("write", filePath, err)
 		}
 		contentLength = int64(len(data))
 		body = bytes.NewReader(data)
@@ -518,7 +518,7 @@ func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath stri
 	// Open the file
 	file, err := os.Open(localPath)
 	if err != nil {
-		return nil, filekit.NewPathError("writefile", localPath, err)
+		return nil, filekit.WrapPathErr("writefile", localPath, err)
 	}
 	defer file.Close()
 

@@ -208,11 +208,11 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	}
 
 	if !a.isPathSafe(filePath) {
-		return nil, filekit.NewPathError("write", filePath, filekit.ErrNotAllowed)
+		return nil, filekit.NewPathError("write", filePath, filekit.ErrCodePermission, "path not allowed")
 	}
 
 	if err := a.ensureConnected(); err != nil {
-		return nil, filekit.NewPathError("write", filePath, err)
+		return nil, filekit.WrapPathErr("write", filePath, err)
 	}
 
 	opts := processOptions(options...)
@@ -222,23 +222,23 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	if !opts.Overwrite {
 		_, err := a.client.Stat(fullPath)
 		if err == nil {
-			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrCodeAlreadyExists, "file already exists")
 		}
 		if !os.IsNotExist(err) {
-			return nil, filekit.NewPathError("write", filePath, err)
+			return nil, filekit.WrapPathErr("write", filePath, err)
 		}
 	}
 
 	// Ensure parent directory exists
 	dir := path.Dir(fullPath)
 	if err := a.client.MkdirAll(dir); err != nil {
-		return nil, filekit.NewPathError("write", filePath, err)
+		return nil, filekit.WrapPathErr("write", filePath, err)
 	}
 
 	// Create file
 	file, err := a.client.Create(fullPath)
 	if err != nil {
-		return nil, filekit.NewPathError("write", filePath, err)
+		return nil, filekit.WrapPathErr("write", filePath, err)
 	}
 	defer file.Close()
 
@@ -246,7 +246,7 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	hash := sha256.New()
 	written, err := io.Copy(io.MultiWriter(file, hash), content)
 	if err != nil {
-		return nil, filekit.NewPathError("write", filePath, err)
+		return nil, filekit.WrapPathErr("write", filePath, err)
 	}
 
 	// Set permissions based on visibility
@@ -658,7 +658,7 @@ func (a *Adapter) removeAll(dirPath string) error {
 func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return nil, filekit.NewPathError("writefile", localPath, err)
+		return nil, filekit.WrapPathErr("writefile", localPath, err)
 	}
 	defer file.Close()
 

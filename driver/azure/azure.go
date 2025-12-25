@@ -80,7 +80,7 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 		blobClient := a.client.ServiceClient().NewContainerClient(a.containerName).NewBlobClient(blobName)
 		_, err := blobClient.GetProperties(ctx, nil)
 		if err == nil {
-			return nil, filekit.NewPathError("write", filePath, filekit.ErrExist)
+			return nil, filekit.NewPathError("write", filePath, filekit.ErrCodeAlreadyExists, "file already exists")
 		}
 		if !bloberror.HasCode(err, bloberror.BlobNotFound) {
 			return nil, mapAzureError("write", filePath, err)
@@ -96,7 +96,7 @@ func (a *Adapter) Write(ctx context.Context, filePath string, content io.Reader,
 	// Read content into buffer (Azure SDK requires content length for some operations)
 	data, err := io.ReadAll(content)
 	if err != nil {
-		return nil, filekit.NewPathError("write", filePath, err)
+		return nil, filekit.WrapPathErr("write", filePath, err)
 	}
 
 	// Calculate checksum
@@ -630,7 +630,7 @@ func (a *Adapter) DeleteDir(ctx context.Context, dirPath string) error {
 func (a *Adapter) WriteFile(ctx context.Context, destPath string, localPath string, options ...filekit.Option) (*filekit.WriteResult, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return nil, filekit.NewPathError("writefile", localPath, err)
+		return nil, filekit.WrapPathErr("writefile", localPath, err)
 	}
 	defer file.Close()
 
