@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.14
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.67
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.79.3
-	github.com/gobeaver/filekit v0.0.0
+	github.com/gobeaver/filekit v0.0.4
 )
 
 require (
@@ -29,7 +29,7 @@ require (
 	github.com/aws/smithy-go v1.22.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/gobeaver/beaver-kit/config v0.1.0 // indirect
-	github.com/gobeaver/filekit/filevalidator v0.0.0 // indirect
+	github.com/gobeaver/filekit/filevalidator v0.0.4 // indirect
 )
 
 replace github.com/gobeaver/filekit => ../..

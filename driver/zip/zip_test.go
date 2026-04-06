@@ -73,7 +73,7 @@ func TestWrite(t *testing.T) {
 		fs, _ := Create(zipPath)
 		defer fs.Close()
 
-		err := fs.Write(ctx, "test.txt", strings.NewReader("hello world"))
+		_, err := fs.Write(ctx, "test.txt", strings.NewReader("hello world"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -93,7 +93,7 @@ func TestWrite(t *testing.T) {
 		fs, _ := Open(zipPath)
 		defer fs.Close()
 
-		err := fs.Write(ctx, "new.txt", strings.NewReader("content"))
+		_, err := fs.Write(ctx, "new.txt", strings.NewReader("content"))
 		if err == nil {
 			t.Error("expected error for write on read-only zip")
 		}
@@ -106,8 +106,8 @@ func TestWrite(t *testing.T) {
 		fs, _ := Create(zipPath)
 		defer fs.Close()
 
-		fs.Write(ctx, "test.txt", strings.NewReader("first"))
-		err := fs.Write(ctx, "test.txt", strings.NewReader("second"))
+		_, _ = fs.Write(ctx, "test.txt", strings.NewReader("first"))
+		_, err := fs.Write(ctx, "test.txt", strings.NewReader("second"))
 		if err == nil {
 			t.Error("expected error for overwrite")
 		}
@@ -120,8 +120,8 @@ func TestWrite(t *testing.T) {
 		fs, _ := OpenOrCreate(zipPath)
 		defer fs.Close()
 
-		fs.Write(ctx, "test.txt", strings.NewReader("first"))
-		err := fs.Write(ctx, "test.txt", strings.NewReader("second"), filekit.WithOverwrite(true))
+		_, _ = fs.Write(ctx, "test.txt", strings.NewReader("first"))
+		_, err := fs.Write(ctx, "test.txt", strings.NewReader("second"), filekit.WithOverwrite(true))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -134,7 +134,7 @@ func TestWrite(t *testing.T) {
 		fs, _ := Create(zipPath)
 		defer fs.Close()
 
-		err := fs.Write(ctx, "a/b/c/test.txt", strings.NewReader("nested"))
+		_, err := fs.Write(ctx, "a/b/c/test.txt", strings.NewReader("nested"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -153,7 +153,7 @@ func TestWrite(t *testing.T) {
 		fs, _ := Create(zipPath)
 		defer fs.Close()
 
-		err := fs.Write(ctx, "../etc/passwd", strings.NewReader("malicious"))
+		_, err := fs.Write(ctx, "../etc/passwd", strings.NewReader("malicious"))
 		if err == nil {
 			t.Error("expected error for path traversal")
 		}

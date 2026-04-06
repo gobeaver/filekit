@@ -7,9 +7,9 @@ toolchain go1.24.2
 require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/gobeaver/beaver-kit/config v0.1.0
-	github.com/gobeaver/filekit/driver/local v0.0.0-00010101000000-000000000000
-	github.com/gobeaver/filekit/driver/memory v0.0.0-20251204124314-895ab7297fff
-	github.com/gobeaver/filekit/filevalidator v0.0.0
+	github.com/gobeaver/filekit/driver/local v0.0.4
+	github.com/gobeaver/filekit/driver/memory v0.0.4
+	github.com/gobeaver/filekit/filevalidator v0.0.4
 )
 
 require (

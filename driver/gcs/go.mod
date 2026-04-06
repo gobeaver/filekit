@@ -6,7 +6,7 @@ toolchain go1.24.2
 
 require (
 	cloud.google.com/go/storage v1.57.2
-	github.com/gobeaver/filekit v0.0.0
+	github.com/gobeaver/filekit v0.0.4
 	google.golang.org/api v0.256.0
 )
 
@@ -30,7 +30,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gobeaver/beaver-kit/config v0.1.0 // indirect
-	github.com/gobeaver/filekit/filevalidator v0.0.0 // indirect
+	github.com/gobeaver/filekit/filevalidator v0.0.4 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.7 // indirect
